@@ -1,5 +1,3 @@
-# %%
-# intent_classifier
 import re
 from typing import Dict, Any, Tuple, List
 
@@ -124,11 +122,4 @@ class IntentClassifier:
             "answer": text,
             "text": text
         }
-
-# %%
-# Example usage 
-classifier = IntentClassifier()
-text_input = "Can you start the quiz?"
-print(classifier.classify(text_input))
-
 

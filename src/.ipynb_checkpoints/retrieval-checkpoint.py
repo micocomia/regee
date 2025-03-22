@@ -2,19 +2,19 @@
 import numpy as np
 from typing import List, Dict, Any, Optional
 from sentence_transformers import SentenceTransformer
-from vector_db import ChromaVectorStore
+from vector_store import VectorStore
 
-class ChromaRetrievalSystem:
+class RetrievalSystem:
     """
     Retrieval system for finding relevant document chunks based on queries using ChromaDB.
     """
-    def __init__(self, vector_store: ChromaVectorStore, 
+    def __init__(self, vector_store: VectorStore, 
                  embedding_model: str = "all-MiniLM-L6-v2"):
         """
         Initialize the retrieval system.
         
         Args:
-            vector_store: ChromaVectorStore instance for document retrieval
+            vector_store: VectorStore instance for document retrieval
             embedding_model: Name of the sentence-transformers model to use
         """
         self.vector_store = vector_store
@@ -51,8 +51,8 @@ class ChromaRetrievalSystem:
         # Search the vector store
         results = self.vector_store.search(
             query_embedding=query_embedding,
-            k=top_k,
-            filter_topics=filter_topics
+            k=top_k
+            #filter_topics=filter_topics
         )
         
         # Compute additional relevance metrics
@@ -111,7 +111,9 @@ class ChromaRetrievalSystem:
                 f"key concepts about {topic}",
                 f"important definitions related to {topic}",
                 f"main principles of {topic}",
-                f"complex aspects of {topic}"
+                f"complex aspects of {topic}",
+                f"details about {topic}",
+                f"{topic}"
             ]
         else:
             # When no topic specified, look for educational content
@@ -128,8 +130,8 @@ class ChromaRetrievalSystem:
         for query in queries:
             results = self.retrieve(
                 query=query,
-                top_k=num_contexts // len(queries) + 1,  # Distribute contexts among queries
-                filter_topics=[topic] if topic else None
+                top_k=num_contexts // len(queries) + 1  # Distribute contexts among queries
+                #filter_topics=[topic] if topic else None
             )
             all_results.extend(results)
         
@@ -150,7 +152,7 @@ class ChromaRetrievalSystem:
             # if len(content.strip()) < 100:
             #     continue
                 
-            # # Skip contexts that are just metadata or references
+            # Skip contexts that are just metadata or references
             # if content.count("\n") > content.count(". ") * 2:
             #     continue
                 

@@ -66,7 +66,7 @@ class QuestionGenerator:
             # Use the improved context retrieval
             contexts = self.retrieval_system.retrieve_for_question_generation(
                 topic=topic, 
-                num_contexts=3
+                num_contexts=100
             )
             
             if not contexts:
@@ -259,10 +259,10 @@ class QuestionGenerator:
             import requests
             
             self.ollama_endpoint = os.getenv("OLLAMA_ENDPOINT", "http://localhost:11434/api/generate")
-            self.ollama_model = os.getenv("OLLAMA_MODEL", "llama2")
+            self.ollama_model = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
             
             # Test connection to Ollama
-            response = requests.get(self.ollama_endpoint.replace("/generate", "/models"))
+            response = requests.get(self.ollama_endpoint.replace("/generate", "/tags"))
             if response.status_code == 200:
                 self.ollama_available = True
                 available_models = response.json().get("models", [])
@@ -354,9 +354,10 @@ class QuestionGenerator:
     
     def _generate_with_ollama(self, context: str, question_type: str, 
                             difficulty: str, topic: Optional[str] = None) -> Dict[str, Any]:
-        """Generate a question using Ollama."""
+        """Generate a question using Ollama with improved JSON parsing."""
         import requests
         import json
+        import re
         
         # Create a prompt based on question type and difficulty
         if question_type == "multiple-choice":
@@ -385,21 +386,72 @@ class QuestionGenerator:
                 result = response.json()
                 question_text = result.get("response", "")
                 
-                # Parse the response
+                # Log the raw response for debugging
+                logger.debug(f"Raw Ollama response: {question_text[:200]}...")
+                
+                # Parse the response - with more robust JSON extraction
                 try:
-                    # Try to parse structured JSON from response
-                    if "{" in question_text and "}" in question_text:
-                        json_str = question_text[question_text.find("{"):question_text.rfind("}")+1]
-                        question_data = json.loads(json_str)
+                    # First attempt: Find JSON between curly braces
+                    json_match = re.search(r'\{.*\}', question_text, re.DOTALL)
+                    if json_match:
+                        json_str = json_match.group(0)
+                        # Remove any markdown code block markers
+                        json_str = re.sub(r'```json|```', '', json_str).strip()
                         
-                        # Add question type to the data
-                        question_data["type"] = question_type
+                        # Clean the JSON string of control characters
+                        json_str = re.sub(r'[\x00-\x1F\x7F-\x9F]', '', json_str)
                         
-                        return question_data
+                        # Try to parse with error handling for each step
+                        try:
+                            question_data = json.loads(json_str)
+                            question_data["type"] = question_type
+                            return question_data
+                        except json.JSONDecodeError as e:
+                            logger.warning(f"JSON parsing error in first attempt: {e}")
+                            
+                            # Second attempt: Try to fix common JSON issues
+                            try:
+                                # Replace single quotes with double quotes (common LLM mistake)
+                                fixed_json = re.sub(r"(?<!\\)'([^']*?)(?<!\\)'", r'"\1"', json_str)
+                                # Ensure property names have double quotes
+                                fixed_json = re.sub(r'(\s*)(\w+)(\s*):(\s*)', r'\1"\2"\3:\4', fixed_json)
+                                question_data = json.loads(fixed_json)
+                                question_data["type"] = question_type
+                                return question_data
+                            except json.JSONDecodeError as e2:
+                                logger.warning(f"JSON parsing error in second attempt: {e2}")
+                                
+                                # Third attempt: Try to extract a valid JSON substring
+                                try:
+                                    # Find the start of a valid JSON object
+                                    start_idx = json_str.find('{')
+                                    # Find the corresponding closing brace
+                                    open_braces = 0
+                                    end_idx = -1
+                                    for i in range(start_idx, len(json_str)):
+                                        if json_str[i] == '{':
+                                            open_braces += 1
+                                        elif json_str[i] == '}':
+                                            open_braces -= 1
+                                        if open_braces == 0:
+                                            end_idx = i + 1
+                                            break
+                                    
+                                    if end_idx > start_idx:
+                                        substring_json = json_str[start_idx:end_idx]
+                                        question_data = json.loads(substring_json)
+                                        question_data["type"] = question_type
+                                        return question_data
+                                    else:
+                                        raise ValueError("Could not find matching JSON braces")
+                                except (json.JSONDecodeError, ValueError) as e3:
+                                    logger.warning(f"JSON parsing error in third attempt: {e3}")
+                                    return self._parse_question_text(question_text, question_type)
                     else:
-                        # Manual parsing if no JSON structure found
+                        logger.warning("No JSON structure found in Ollama response")
                         return self._parse_question_text(question_text, question_type)
-                except json.JSONDecodeError:
+                except Exception as e:
+                    logger.warning(f"General error in JSON parsing: {str(e)}")
                     return self._parse_question_text(question_text, question_type)
             else:
                 logger.error(f"Ollama API error: {response.status_code} - {response.text}")
@@ -407,7 +459,7 @@ class QuestionGenerator:
         except Exception as e:
             logger.error(f"Error with Ollama generation: {str(e)}")
             return self._generate_simple_question(context, question_type, difficulty)
-    
+        
     def _create_mc_prompt(self, context: str, difficulty: str, topic: Optional[str] = None) -> str:
         """Create a prompt for multiple-choice question generation."""
         topic_instruction = f"about {topic}" if topic else "on the key concepts in this material"
@@ -425,29 +477,40 @@ class QuestionGenerator:
             difficulty_specifics = "Focus on application of concepts, cause-and-effect relationships, or comparing and contrasting ideas."
         else:  # hard
             difficulty_specifics = "Focus on analysis of complex scenarios, evaluation of approaches, predictive outcomes, or synthesizing information across multiple concepts."
-        
+
+        # Clean and sanitize the context
+        # Remove any control characters and ensure JSON-safe strings
+        import re
+        clean_context = re.sub(r'[\x00-\x1F\x7F-\x9F]', '', context)
+
         return f"""
-        As an educational expert, create a high-quality multiple-choice question {topic_instruction} that would {difficulty_guidance}.
+        As an educational expert, create a high-quality multiple-choice question {topic_instruction} that would {difficulty_guidance}. If the provided context is limited or lacks detail, first supplement it with relevant information before generating questions. 
         
         Context:
-        {context}
+        {clean_context}
         
         {difficulty_specifics}
         
         IMPORTANT REQUIREMENTS:
-        1. The question should focus on substantive, meaningful content that demonstrates understanding
-        2. DO NOT create questions about author names, paper titles, dates, or superficial information
-        3. DO NOT create simple fill-in-the-blank questions that just remove a single word from a sentence
-        4. All answer options should be plausible and of similar length and style
-        5. The question should be clear, unambiguous, and test important concepts
-        6. Include a thorough explanation that not only explains the correct answer but also why other options are incorrect
-        7. DO NOT create questions that are not based on the context
+        1. Do NOT add ANY introductory text.
+        2. The output must be in valid JSON format only.
+        3. Start your response with the opening curly brace '{{' and end with a closing curly brace '}}'.
+        4. Do not add any explanatory text before or after the JSON.
+        5. The question should focus on substantive, meaningful content that demonstrates understanding
+        6. DO NOT create questions about author names, paper titles, dates, or superficial information
+        7. DO NOT create simple fill-in-the-blank questions that just remove a single word from a sentence
+        8. All answer options should be plausible and of similar length and style
+        9. The question should be clear, unambiguous, and test important concepts
+        10. Include a concise explanation that not only explains the correct answer but also why other options are incorrect
+        11. ONLY add supplementary information when NECESSARY.
         
-        Return your response as a JSON object with these fields:
-        - question: The question text
-        - options: Array of 4 possible answers (A, B, C, D)
-        - answer: The correct option letter (A, B, C, or D)
-        - explanation: Detailed explanation of why the answer is correct and others are incorrect
+        JSON OUTPUT REQUIREMENTS:
+        {{
+            "question": "The question text here",
+            "options": ["Option A text", "Option B text", "Option C text", "Option D text"],
+            "answer": "A, B, C, or D",
+            "explanation": "Detailed explanation of why the correct answer is right and others are wrong"
+        }}
         """
 
     def _create_free_text_prompt(self, context: str, difficulty: str, topic: Optional[str] = None) -> str:
@@ -468,28 +531,37 @@ class QuestionGenerator:
         else:  # hard
             question_types = "This could be an 'evaluate', 'synthesize', 'propose a solution', 'predict outcomes', or 'critique' type question."
         
-        return f"""
-        As an educational expert, create a thought-provoking free-text question {topic_instruction} that would {difficulty_guidance}.
+        # Clean and sanitize the context
+        # Remove any control characters and ensure JSON-safe strings
+        import re
+        clean_context = re.sub(r'[\x00-\x1F\x7F-\x9F]', '', context)
         
-        Context:
-        {context}
-        
-        {question_types}
-        
-        IMPORTANT REQUIREMENTS:
-        1. Create a question that tests deeper understanding, not mere memorization
-        2. The question should require original thinking, not just repeating the text
-        3. DO NOT create questions about superficial details like author names or dates
-        4. The question should be specific enough to be answerable from the context
-        5. Include a comprehensive model answer that demonstrates what a good response would include
-        6. DO NOT create questions that are not based on the context
-
-        Return your response as a JSON object with these fields:
-        - question: The question text
-        - answer: A detailed model answer to the question
-        - key_points: 3-5 specific key points that should be present in a good answer
-        - grading_criteria: Clear criteria for what would constitute an excellent answer
-        """
+        return f"""As an educational expert, create a thought-provoking free-text question {topic_instruction} that would {difficulty_guidance}. If the provided context is limited or lacks detail, first supplement it with relevant information before generating questions.
+    
+    Context:
+    {clean_context}
+    
+    {question_types}
+    
+    IMPORTANT REQUIREMENTS:
+    1. Do NOT add ANY introductory text.
+    2. The output must be in valid JSON format only.
+    3. Start your response with the opening curly brace '{{' and end with a closing curly brace '}}'.
+    4. Do not add any explanatory text before or after the JSON.
+    5. Create a question that tests deeper understanding, not mere memorization
+    6. The question should require original thinking, not just repeating the text
+    7. DO NOT create questions about superficial details like author names or dates
+    8. The question should be specific enough to be answerable from the context
+    9. Include a comprehensive model answer that demonstrates what a good response would include
+    10. ONLY add supplementary information when NECESSARY.
+    
+    JSON OUTPUT REQUIREMENTS:
+    {{
+        "question": "The question text here",
+        "answer": "A detailed model answer to the question",
+        "key_points": ["Key point 1", "Key point 2", "Key point 3", "Key point 4"],
+        "grading_criteria": ["Criterion 1", "Criterion 2", "Criterion 3", "Criterion 4"]
+    }}"""
     
     def _parse_question_text(self, text: str, question_type: str) -> Dict[str, Any]:
         """Manually parse question text if JSON parsing fails."""
@@ -1078,7 +1150,7 @@ class QuestionGenerator:
         print("Retrieving contexts...")
         contexts = self.retrieval_system.retrieve_for_question_generation(
             topic=topic, 
-            num_contexts=3
+            num_contexts=100
         )
         
         if not contexts:
