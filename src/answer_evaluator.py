@@ -186,7 +186,7 @@ class AnswerEvaluator:
             feedback = f"Correct! {options[ord(correct_answer.upper()) - 65]} is the right answer."
         else:
             correct_option = options[ord(correct_answer.upper()) - 65]
-            feedback = f"That's not quite right. Explanation: {correct_option}."
+            feedback = f"That's not quite right. The correct answer is {correct_answer}.\n\nExplanation: {correct_option}"
 
             # Add explanation if available
             if "explanation" in question:
@@ -227,11 +227,12 @@ class AnswerEvaluator:
             2. The output must be in valid JSON format only.
             3. Start your response with the opening curly brace '{{' and end with a closing curly brace '}}'.
             4. Do not add any explanatory text before or after the JSON.
+            5. Ensure that the feedback is informative but concise.
     
             JSON OUTPUT REQUIREMENTS:
             {{
                 "is_correct": true/false,
-                "feedback": "Your detailed feedback here"
+                "feedback": "Your feedback here"
             }}
             """
 
@@ -295,16 +296,21 @@ class AnswerEvaluator:
 
             Student's Answer: {user_answer}
 
+            Evaluate the student's answer based on the reference answer and key points. Provide:
+            1. Is the answer correct (Yes/No/Partially)?
+            2. Feedback explaining the evaluation. Address the student directly in your feedback.
+
             IMPORTANT REQUIREMENTS:
             1. Do NOT add ANY introductory text.
             2. The output must be in valid JSON format only.
             3. Start your response with the opening curly brace '{{' and end with a closing curly brace '}}'.
             4. Do not add any explanatory text before or after the JSON.
-    
+            5. Ensure that the feedback is informative but concise.
+            
             JSON OUTPUT REQUIREMENTS:
             {{
                 "is_correct": true/false,
-                "feedback": "Your detailed feedback here"
+                "feedback": "Your feedback here"
             }}
             """
 

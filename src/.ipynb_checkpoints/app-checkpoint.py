@@ -8,13 +8,13 @@ from typing import Dict, Any, List, Optional
 import logging
 
 # Import components
-from 1_document_processor import DocumentProcessor 
-from 2_vector_store import VectorStore
-from 3_retrieval import RetrievalSystem
-from 4_intent_classifier import IntentClassifier
-from 5_intent_handlers import IntentHandlerManager, SessionState
-from 6_question_generator import QuestionGenerator
-from 7_answer_evaluator import AnswerEvaluator
+from document_processor import DocumentProcessor 
+from vector_store import VectorStore
+from retrieval import RetrievalSystem
+from intent_classifier import IntentClassifier
+from intent_handler import IntentHandlerManager, SessionState
+from question_generator import QuestionGenerator
+from answer_evaluator import AnswerEvaluator
 from speech_recognition import SpeechRecognition
 
 # Set up logging
@@ -29,6 +29,8 @@ if 'initialized' not in st.session_state:
     st.session_state.document_names = []
     st.session_state.topics = []
     st.session_state.speech_enabled = False
+    st.session_state.speech_input = None
+    st.session_state.awaiting_response = False
 
 def initialize_systems():
     """Initialize all the required systems."""
@@ -37,9 +39,9 @@ def initialize_systems():
         return
 
     # Document Processor
-    st.session_state.document_processor =  DocumentProcessor(
+    st.session_state.document_processor = DocumentProcessor(
         embedding_model="all-MiniLM-L6-v2",
-        chunk_size=300,  # Adjust chunk size as needed
+        chunk_size=300,
         chunk_overlap=50
     )
     
@@ -62,23 +64,30 @@ def initialize_systems():
     )
 
     # Answer evaluator
-    st.session_state.answer_evaluator = AnswerEvaluator(api_key=os.getenv("OPENAI_API_KEY"))
+    st.session_state.answer_evaluator = AnswerEvaluator(
+        llm_backend='ollama',
+        use_local_llm=False,
+        use_ollama=True
+    )
     
     # Speech recognition
     st.session_state.speech_recognition = SpeechRecognition()
+    
+    # Register the speech result callback
+    st.session_state.speech_recognition.register_result_callback(
+        lambda text: speech_to_text_callback(text)
+    )
 
-
+    # Intent classifier
     st.session_state.intent_classifier = IntentClassifier()
-  
     
     # Intent handler manager
     st.session_state.intent_handler = IntentHandlerManager(
+        document_processor=st.session_state.document_processor,
         retrieval_system=st.session_state.retrieval_system,
+        question_generator=st.session_state.question_generator,
         answer_evaluator=st.session_state.answer_evaluator,
-        speech_recognition=st.session_state.speech_recognition,
-        # These would come from Person A's code
-        # question_generator=st.session_state.question_generator,
-        # document_processor=st.session_state.document_processor
+        speech_recognition=st.session_state.speech_recognition
     )
     
     st.session_state.initialized = True
@@ -89,82 +98,61 @@ def add_message(role: str, content: str, **kwargs):
     st.session_state.messages.append({"role": role, "content": content, **kwargs})
 
 def handle_user_input(user_input: str):
-    """Process user input and generate a response."""
+    """
+    Process user input and generate a response.
+    This function adds the user message to history and marks it for processing.
+    """
     if not user_input:
         return
     
     # Add user message to history
     add_message("user", user_input)
     
-    # This would use Person A's intent classifier to determine intent
-    # intent_data = st.session_state.intent_classifier.classify(user_input)
-    # intent_type = intent_data.get("intent", "unknown")
+    # Mark that we're awaiting a response to this message
+    st.session_state.awaiting_response = True
     
-    # Since we don't have Person A's code yet, use a simple mock classifier
-    intent_type, intent_data = mock_intent_classifier(user_input)
-    
-    # Process the intent
-    response = st.session_state.intent_handler.handle_intent(intent_type, intent_data)
-    
-    # Add assistant message to history
-    add_message("assistant", response.get("text", "I'm not sure how to respond to that."))
-    
-    # Handle special response types
-    if "question" in response:
-        st.session_state.current_question = response["question"]
-    
-    if "session_summary" in response:
-        st.session_state.session_summary = response["session_summary"]
+    # Force a rerun to update the UI and show the user message
+    st.rerun()
 
-def mock_intent_classifier(text: str) -> tuple:
-    """Simple mock intent classifier until Person A's code is integrated."""
-    text_lower = text.lower()
+def process_pending_response():
+    """
+    Process the most recent user message and generate a response if needed.
+    This function checks if there's a pending user message without a response,
+    generates the response, and adds it to the message history.
+    """
+    if st.session_state.awaiting_response:
+        # Get the most recent user message
+        user_input = st.session_state.messages[-1]["content"]
+        
+        # Use the intent classifier to determine intent
+        intent_data = st.session_state.intent_classifier.classify(user_input)
+        intent_type = intent_data.get("intent", "unknown")
+        
+        # Process the intent
+        response = st.session_state.intent_handler.handle_intent(intent_type, intent_data)
+        
+        # Add assistant message to history
+        add_message("assistant", response.get("text", "I'm not sure how to respond to that."))
+        
+        # Handle special response types
+        if "question" in response:
+            st.session_state.current_question = response["question"]
+        
+        if "session_summary" in response:
+            st.session_state.session_summary = response["session_summary"]
+        
+        # Mark that we've processed the response
+        st.session_state.awaiting_response = False
+
+def speech_to_text_callback(text: str):
+    """Callback function for handling speech recognition results."""
+    logger.info(f"Speech recognition callback received: {text}")
     
-    # Document upload intent
-    if "upload" in text_lower or "document" in text_lower:
-        return "document_upload", {"text": text}
+    # Store the recognized speech in the session state
+    st.session_state.speech_input = text
     
-    # Start/Stop review intent
-    if "start" in text_lower and ("review" in text_lower or "quiz" in text_lower):
-        return "start_review", {"text": text}
-    
-    if "stop" in text_lower or "end" in text_lower or "finish" in text_lower:
-        return "stop_review", {"text": text}
-    
-    # Review status intent
-    if "status" in text_lower or "progress" in text_lower or "how am i doing" in text_lower:
-        return "review_status", {"text": text}
-    
-    # Set question type intent
-    if "multiple choice" in text_lower or "multiple-choice" in text_lower:
-        return "set_question_type", {"question_type": "multiple-choice"}
-    
-    if "free text" in text_lower or "free-text" in text_lower or "open ended" in text_lower:
-        return "set_question_type", {"question_type": "free-text"}
-    
-    # Set number of questions intent
-    if "questions" in text_lower and any(str(i) in text_lower for i in range(1, 51)):
-        # Extract the number from text
-        for i in range(1, 51):
-            if str(i) in text_lower:
-                return "set_num_questions", {"num_questions": i}
-    
-    # Set difficulty intent
-    if "easy" in text_lower:
-        return "set_difficulty", {"difficulty": "easy"}
-    if "medium" in text_lower or "moderate" in text_lower:
-        return "set_difficulty", {"difficulty": "medium"}
-    if "hard" in text_lower or "difficult" in text_lower:
-        return "set_difficulty", {"difficulty": "hard"}
-    
-    # Speech control intents
-    if "enable speech" in text_lower or "turn on speech" in text_lower:
-        return "enable_speech", {"text": text}
-    if "disable speech" in text_lower or "turn off speech" in text_lower:
-        return "disable_speech", {"text": text}
-    
-    # Handle answer intent (default if no other intent matches)
-    return "answer", {"answer": text}
+    # Process the speech input as a user message
+    handle_user_input(text)
 
 def process_uploaded_file(uploaded_file):
     """Process an uploaded document."""
@@ -175,138 +163,33 @@ def process_uploaded_file(uploaded_file):
     with open(file_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
     
-    # This would use Person A's document processor
-    # result = st.session_state.document_processor.process_document(file_path)
+    # Process the document using the document processor
+    result = st.session_state.document_processor.process_document(file_path)
     
-    # For now, we'll just mock the processing and add a success message
-    st.session_state.documents.append(file_path)
-    st.session_state.document_names.append(uploaded_file.name)
-    
-    # Extract some mock topics from the document name
-    topics = [t.strip() for t in uploaded_file.name.replace(".pdf", "").replace(".pptx", "").split("_")]
-    for topic in topics:
-        if topic not in st.session_state.topics and len(topic) > 3:
-            st.session_state.topics.append(topic)
-            
-    # Add a confirmation message to the chat
-    add_message("assistant", f"I've processed '{uploaded_file.name}'. You can now start a review session.")
-    
-    return True
-
-def get_js_code():
-    """Get JavaScript code for speech recognition and other frontend functionality."""
-    return """
-    <script>
-    // Initialize WebSocket for speech recognition events
-    const speechSocket = new WebSocket(`ws://${window.location.host}/speech`);
-    
-    speechSocket.onopen = function(e) {
-        console.log("Speech WebSocket connection established");
-    };
-    
-    speechSocket.onmessage = function(event) {
-        const data = JSON.parse(event.data);
-        if (data.type === "speech_config") {
-            // Update speech recognition config
-            if (window.speechManager) {
-                window.speechManager.loadConfig(data.config);
-            }
-        }
-    };
-    
-    // Speech recognition class would be implemented here
-    // (Implementation from speech_recognition.py JavaScript code)
-    
-    // Function to send speech recognition result to the backend
-    function sendSpeechResult(text) {
-        if (speechSocket.readyState === WebSocket.OPEN) {
-            speechSocket.send(JSON.stringify({
-                type: "speech_result",
-                text: text
-            }));
-        }
-    }
-    
-    // Function to scroll chat to bottom
-    function scrollChatToBottom() {
-        const chatContainer = document.querySelector('.stChatContainer');
-        if (chatContainer) {
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-        }
-    }
-    
-    // Set up observer to scroll chat when new messages arrive
-    document.addEventListener('DOMContentLoaded', function() {
-        const observer = new MutationObserver(scrollChatToBottom);
+    if result.get("success", False):
+        st.session_state.documents.append(file_path)
+        st.session_state.document_names.append(uploaded_file.name)
         
-        // Start observing after a delay to ensure the chat container exists
-        setTimeout(() => {
-            const chatContainer = document.querySelector('.stChatContainer');
-            if (chatContainer) {
-                observer.observe(chatContainer, { childList: true, subtree: true });
-            }
-        }, 1000);
+        # Get topics from the document processor if available
+        if "topics" in result:
+            for topic in result["topics"]:
+                if topic not in st.session_state.topics:
+                    st.session_state.topics.append(topic)
+                
+        # Add a confirmation message to the chat
+        add_message("assistant", f"I've processed '{uploaded_file.name}'. You can now start a review session.")
         
-        // Add speech button if speech is enabled
-        setTimeout(() => {
-            const inputArea = document.querySelector('.stChatInputContainer');
-            if (inputArea && !document.getElementById('speech-button')) {
-                const speechButton = document.createElement('button');
-                speechButton.id = 'speech-button';
-                speechButton.className = 'speech-button';
-                speechButton.innerHTML = '<i class="fas fa-microphone"></i>';
-                speechButton.title = 'Start speech recognition';
-                
-                inputArea.insertBefore(speechButton, inputArea.firstChild);
-                
-                speechButton.addEventListener('click', function() {
-                    if (window.speechManager) {
-                        if (window.speechManager.isListening) {
-                            window.speechManager.stopListening();
-                        } else {
-                            window.speechManager.startListening();
-                        }
-                    }
-                });
-            }
-        }, 1000);
-    });
-    </script>
-    
-    <style>
-    .speech-button {
-        background-color: #4CAF50;
-        border: none;
-        color: white;
-        padding: 10px;
-        text-align: center;
-        text-decoration: none;
-        display: inline-block;
-        font-size: 16px;
-        margin: 4px 2px;
-        cursor: pointer;
-        border-radius: 50%;
-        width: 40px;
-        height: 40px;
-    }
-    
-    .speech-button.listening {
-        background-color: #f44336;
-        animation: pulse 1.5s infinite;
-    }
-    
-    @keyframes pulse {
-        0% { transform: scale(1); }
-        50% { transform: scale(1.1); }
-        100% { transform: scale(1); }
-    }
-    </style>
-    """
+        return True
+    else:
+        # Handle processing failure
+        error_msg = result.get("error", "Unknown error occurred during document processing")
+        add_message("assistant", f"I couldn't process '{uploaded_file.name}'. Error: {error_msg}")
+        return False
 
 def main():
     """Main Streamlit app function."""
     st.set_page_config(
-        page_title="Conversational Review Chatbot",
+        page_title="ReGee - Educational Review Assistant",
         page_icon="📚",
         layout="wide"
     )
@@ -314,14 +197,18 @@ def main():
     # Initialize systems
     initialize_systems()
     
-    # Display custom CSS and JavaScript
-    st.markdown(get_js_code(), unsafe_allow_html=True)
+    # Process any pending responses before rendering the UI
+    process_pending_response()
+    
+    # Display custom CSS and JavaScript for speech recognition
+    if 'speech_recognition' in st.session_state:
+        st.markdown(st.session_state.speech_recognition.get_js_code(), unsafe_allow_html=True)
     
     # App title and description
-    st.title("📚 Conversational Review Chatbot")
+    st.title("📚 ReGee - Educational Review Assistant")
     st.markdown("""
-    Upload your learning materials and have a conversation to review the content.
-    The chatbot will ask you questions and provide feedback on your answers.
+    Upload your learning materials and let ReGee help you review by asking questions about the content.
+    ReGee will help you think critically by quizzing you rather than explaining concepts.
     """)
     
     # Sidebar for document upload and settings
@@ -401,8 +288,13 @@ def main():
         with st.chat_message(message["role"]):
             st.write(message["content"])
     
+    # Add a placeholder for typing indicators when waiting for a response
+    if st.session_state.awaiting_response:
+        with st.chat_message("assistant"):
+            st.write("Thinking...")
+    
     # Chat input
-    user_input = st.chat_input("Type your message here...")
+    user_input = st.chat_input("Type your message here or press Ctrl+Space to speak")
     if user_input:
         handle_user_input(user_input)
 

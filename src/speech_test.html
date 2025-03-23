@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Speech Recognition Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            color: #333;
+        }
+        .container {
+            background-color: #f5f5f5;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        #result {
+            min-height: 100px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 20px 0;
+            background-color: white;
+        }
+        .status {
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button.listening {
+            background-color: #f44336;
+        }
+        .error {
+            color: #f44336;
+            font-weight: bold;
+        }
+        .shortcuts {
+            margin-top: 20px;
+            font-size: 14px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <h1>Speech Recognition Test</h1>
+    
+    <div class="container">
+        <p>This is a standalone speech recognition test for debugging. Your browser compatibility and microphone access can be verified here.</p>
+        
+        <div class="status" id="status">Ready</div>
+        
+        <button id="startBtn">🎤 Start Recognition</button>
+        <button id="checkBtn">🔍 Check Browser Compatibility</button>
+        
+        <div id="result">Recognition results will appear here...</div>
+        
+        <div class="shortcuts">
+            <p>Keyboard shortcut: Press <b>Ctrl+Space</b> (Windows/Linux) or <b>Command+Space</b> (Mac) to toggle speech recognition</p>
+        </div>
+    </div>
+    
+    <script>
+        // Check if speech recognition is available in this browser
+        function checkBrowserCompatibility() {
+            const statusElement = document.getElementById('status');
+            const resultElement = document.getElementById('result');
+            
+            if ('webkitSpeechRecognition' in window) {
+                statusElement.textContent = "✅ Your browser supports speech recognition (webkit)";
+                statusElement.className = "status";
+                resultElement.innerHTML += "<p>Your browser is compatible with the Web Speech API (webkit implementation).</p>";
+                return true;
+            } else if ('SpeechRecognition' in window) {
+                statusElement.textContent = "✅ Your browser supports speech recognition (standard)";
+                statusElement.className = "status";
+                resultElement.innerHTML += "<p>Your browser is compatible with the Web Speech API (standard implementation).</p>";
+                return true;
+            } else {
+                statusElement.textContent = "❌ Your browser does not support speech recognition";
+                statusElement.className = "status error";
+                resultElement.innerHTML += "<p class='error'>Your browser does not support the Web Speech API. Please try Chrome, Edge, or Safari.</p>";
+                return false;
+            }
+        }
+        
+        // Initialize speech recognition
+        function initSpeechRecognition() {
+            // Check browser compatibility first
+            if (!checkBrowserCompatibility()) {
+                return;
+            }
+            
+            const statusElement = document.getElementById('status');
+            const startButton = document.getElementById('startBtn');
+            const resultElement = document.getElementById('result');
+            
+            // Create speech recognition object
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            const recognition = new SpeechRecognition();
+            
+            // Configure recognition
+            recognition.lang = 'en-US';
+            recognition.interimResults = false;
+            recognition.maxAlternatives = 1;
+            
+            // State variable to track if we're listening
+            let isListening = false;
+            
+            // Handle recognition results
+            recognition.onresult = function(event) {
+                const transcript = event.results[0][0].transcript;
+                const confidence = event.results[0][0].confidence;
+                
+                console.log('Speech recognized:', transcript, 'Confidence:', confidence);
+                
+                // Display the result
+                resultElement.innerHTML += `
+                    <p><strong>Recognized:</strong> ${transcript}</p>
+                    <p><small>Confidence: ${(confidence * 100).toFixed(2)}%</small></p>
+                `;
+                
+                // Update state
+                isListening = false;
+                startButton.textContent = '🎤 Start Recognition';
+                startButton.classList.remove('listening');
+                statusElement.textContent = 'Recognition completed';
+            };
+            
+            // Handle errors
+            recognition.onerror = function(event) {
+                console.error('Speech recognition error:', event.error);
+                
+                let errorMessage = 'Error: ' + event.error;
+                
+                // More helpful error messages
+                if (event.error === 'not-allowed') {
+                    errorMessage = 'Microphone access was denied. Please allow microphone access in your browser settings and try again.';
+                } else if (event.error === 'no-speech') {
+                    errorMessage = 'No speech was detected. Please try speaking louder or check your microphone.';
+                } else if (event.error === 'audio-capture') {
+                    errorMessage = 'No microphone was found. Please ensure your microphone is properly connected.';
+                }
+                
+                statusElement.textContent = errorMessage;
+                statusElement.className = "status error";
+                resultElement.innerHTML += `<p class="error">${errorMessage}</p>`;
+                
+                // Update state
+                isListening = false;
+                startButton.textContent = '🎤 Start Recognition';
+                startButton.classList.remove('listening');
+            };
+            
+            // Handle end of recognition
+            recognition.onend = function() {
+                console.log('Speech recognition ended');
+                
+                if (isListening) {
+                    // If still in listening state but recognition ended, restart it
+                    // This can happen due to a short pause in speech
+                    recognition.start();
+                    statusElement.textContent = 'Listening...';
+                }
+            };
+            
+            // Button handler
+            startButton.addEventListener('click', toggleRecognition);
+            
+            // Keyboard shortcut
+            document.addEventListener('keydown', (event) => {
+                if ((event.ctrlKey || event.metaKey) && event.code === 'Space') {
+                    event.preventDefault();
+                    toggleRecognition();
+                }
+            });
+            
+            // Helper function to toggle recognition
+            function toggleRecognition() {
+                if (isListening) {
+                    recognition.stop();
+                    isListening = false;
+                    startButton.textContent = '🎤 Start Recognition';
+                    startButton.classList.remove('listening');
+                    statusElement.textContent = 'Recognition stopped';
+                    console.log('Recognition stopped');
+                } else {
+                    try {
+                        recognition.start();
+                        isListening = true;
+                        startButton.textContent = '⏹️ Stop Recognition';
+                        startButton.classList.add('listening');
+                        statusElement.textContent = 'Listening...';
+                        resultElement.innerHTML += '<p>Started listening. Speak now...</p>';
+                        console.log('Recognition started');
+                    } catch (error) {
+                        console.error('Error starting recognition:', error);
+                        statusElement.textContent = 'Error: ' + error.message;
+                        statusElement.className = "status error";
+                        resultElement.innerHTML += `<p class="error">Failed to start speech recognition: ${error.message}</p>`;
+                    }
+                }
+            }
+        }
+        
+        // Set up page
+        document.addEventListener('DOMContentLoaded', function() {
+            const checkButton = document.getElementById('checkBtn');
+            checkButton.addEventListener('click', checkBrowserCompatibility);
+            
+            // Initialize speech recognition
+            initSpeechRecognition();
+        });
+    </script>
+</body>
+</html>

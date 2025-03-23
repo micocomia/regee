@@ -503,13 +503,14 @@ class QuestionGenerator:
         9. The question should be clear, unambiguous, and test important concepts
         10. Include a concise explanation that not only explains the correct answer but also why other options are incorrect
         11. ONLY add supplementary information when NECESSARY.
+        12. In the options text, DO NOT precede each option with their respective letters.
         
         JSON OUTPUT REQUIREMENTS:
         {{
             "question": "The question text here",
             "options": ["Option A text", "Option B text", "Option C text", "Option D text"],
             "answer": "A, B, C, or D",
-            "explanation": "Detailed explanation of why the correct answer is right and others are wrong"
+            "explanation": "Concise explanation of why the correct answer is right and others are wrong"
         }}
         """
 
@@ -554,6 +555,7 @@ class QuestionGenerator:
     8. The question should be specific enough to be answerable from the context
     9. Include a comprehensive model answer that demonstrates what a good response would include
     10. ONLY add supplementary information when NECESSARY.
+    11. Consider the difficulty of the question when providing the anser (e.g., shorter answers for easy, longer for hard)
     
     JSON OUTPUT REQUIREMENTS:
     {{
