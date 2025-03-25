@@ -1,6 +1,7 @@
 # app.py
 import streamlit as st
 from streamlit.components.v1 import html
+from streamlined_custom_component import create_component
 import json
 import os
 import base64
@@ -8,6 +9,7 @@ import time
 from typing import Dict, Any, List, Optional
 import logging
 import re
+import hashlib
 
 # Import components
 from document_processor import DocumentProcessor 
@@ -17,12 +19,14 @@ from intent_classifier import IntentClassifier
 from intent_handler import IntentHandlerManager, SessionState
 from question_generator import QuestionGenerator
 from answer_evaluator import AnswerEvaluator
-from speech_recognition import SpeechRecognition
-from sidebar_speech import initialize_sidebar_speech  # Import the new sidebar speech module
+from speech_recognition import speech_recognition
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+gee_gee_avatar = "https://yt3.googleusercontent.com/ytc/AIdro_ntlFIYXvx-85ML7yd7DEHYO4Ehd9VF6vE-QHCT6JYVoVw=s900-c-k-c0x00ffffff-no-rj"
+user_avatar = None
 
 # Initialize session state
 if 'initialized' not in st.session_state:
@@ -38,6 +42,11 @@ if 'initialized' not in st.session_state:
     st.session_state.processing_start_time = None
     st.session_state.show_processing = False  # New flag for processing display
     st.session_state.processing_message = ""  # Message to show during processing
+    
+    # Speech recognition specific state
+    st.session_state.speech_sidebar_enabled = False
+    st.session_state.recognized_text = ""
+    st.session_state.speech_to_send = ""
 
 def initialize_systems():
     """Initialize all the required systems."""
@@ -76,10 +85,7 @@ def initialize_systems():
         use_local_llm=False,
         use_ollama=True
     )
-    
-    # Speech recognition
-    st.session_state.speech_recognition = SpeechRecognition()
-    
+        
     # Intent classifier
     st.session_state.intent_classifier = IntentClassifier()
     
@@ -89,7 +95,6 @@ def initialize_systems():
         retrieval_system=st.session_state.retrieval_system,
         question_generator=st.session_state.question_generator,
         answer_evaluator=st.session_state.answer_evaluator,
-        speech_recognition=st.session_state.speech_recognition
     )
     
     # Set speech state
@@ -98,9 +103,11 @@ def initialize_systems():
     st.session_state.initialized = True
     logger.info("All systems initialized")
 
-def add_message(role: str, content: str, **kwargs):
+def add_message(role: str, avatar: str, content: str, **kwargs):
     """Add a message to the conversation history."""
-    message_data = {"role": role, "content": content}
+    message_data = {"role": role, 
+                    "avatar": avatar,
+                    "content": content}
     
     # Add any additional data (like question data)
     for key, value in kwargs.items():
@@ -117,19 +124,10 @@ def handle_user_input(user_input: str):
         return
     
     # Add user message to history
-    add_message("user", user_input)
+    add_message("user", user_avatar, user_input)
     
     # Set up processing state to show a spinner
     st.session_state.show_processing = True
-    
-    # Set the processing type and message based on the context
-    if st.session_state.intent_handler.session.is_reviewing:
-        if st.session_state.intent_handler.session.current_question is not None:
-            st.session_state.processing_message = "Evaluating your answer..."
-        else:
-            st.session_state.processing_message = "Generating next question..."
-    else:
-        st.session_state.processing_message = "Generating question based on uploaded documents..."
     
     # Force a rerun to update the UI and show the processing indicator
     st.rerun()
@@ -140,6 +138,9 @@ def generate_assistant_response():
     This is called only when show_processing is True.
     """
     try:
+        # Add a slight delay before responding (adjust seconds as needed)
+        time.sleep(0.3)  # 500ms delay
+
         # Get the most recent user message
         user_input = st.session_state.messages[-1]["content"]
         
@@ -171,11 +172,11 @@ def generate_assistant_response():
             message_kwargs["session_summary"] = response["session_summary"]
         
         # Add assistant message to history with any special data
-        add_message("assistant", response.get("text", "I'm not sure how to respond to that."), **message_kwargs)
+        add_message("assistant", gee_gee_avatar, response.get("text", "I'm not sure how to respond to that."), **message_kwargs)
     except Exception as e:
         # Handle errors gracefully
         logger.error(f"Error processing response: {str(e)}")
-        add_message("assistant", f"I encountered an error while processing your request. Please try again or try rephrasing your message.")
+        add_message("assistant", gee_gee_avatar, f"I encountered an error while processing your request. Please try again or try rephrasing your message.")
     finally:
         # Reset processing indicators
         st.session_state.show_processing = False
@@ -199,7 +200,7 @@ def process_uploaded_file(uploaded_file, is_part_of_batch=False):
         
         # Add an initial message to show upload started (only if not part of batch)
         if not is_part_of_batch:
-            add_message("assistant", f"Processing '{uploaded_file.name}'...")
+            add_message("assistant", gee_gee_avatar, f"Processing '{uploaded_file.name}'...")
         
         # Process the document using the document processor
         processed_chunks = st.session_state.document_processor.process_document(file_path)
@@ -242,7 +243,7 @@ def process_uploaded_file(uploaded_file, is_part_of_batch=False):
                 )
             else:
                 # For batch processing, add a specific error message
-                add_message("assistant", f"Failed to process '{uploaded_file.name}': No content extracted.")
+                add_message("assistant", gee_gee_avatar, f"Failed to process '{uploaded_file.name}': No content extracted.")
             return False
             
     except Exception as e:
@@ -255,13 +256,13 @@ def process_uploaded_file(uploaded_file, is_part_of_batch=False):
             )
         else:
             # For batch processing, add a specific error message
-            add_message("assistant", f"Failed to process '{uploaded_file.name}': {str(e)}")
+            add_message("assistant", gee_gee_avatar, f"Failed to process '{uploaded_file.name}': {str(e)}")
         return False
 
 def display_chat_messages():
     """Display chat messages with special formatting for questions."""
     for i, message in enumerate(st.session_state.messages):
-        with st.chat_message(message["role"]):
+        with st.chat_message(name=message["role"], avatar=message["avatar"]):
             # Check if this message contains a question
             if message["role"] == "assistant" and "question" in message:
                 question_data = message["question"]
@@ -285,6 +286,55 @@ def display_chat_messages():
                 # Regular message without question data
                 st.write(message["content"])
 
+def render_speech_sidebar():
+    """Render the speech recognition sidebar component using streamlined_custom_component"""
+    with st.sidebar:
+        st.subheader("Speech Recognition")
+        
+        # Toggle for enabling/disabling
+        speech_enabled = st.toggle("Enable Speech Recognition", value=st.session_state.speech_sidebar_enabled)
+        
+        # Update state if changed
+        if speech_enabled != st.session_state.speech_sidebar_enabled:
+            st.session_state.speech_sidebar_enabled = speech_enabled
+            st.session_state.recognized_text = ""
+        
+        # Only show the interface if enabled
+        if speech_enabled:
+            # Create the speech component
+            speech_component = speech_recognition()
+            
+            # Display the component and get its return value
+            speech_result = speech_component()
+            
+            # Process the speech recognition results
+            if speech_result:
+                status = speech_result.get("status", "")
+                transcript = speech_result.get("transcript", "")
+                process_immediately = speech_result.get("process_immediately", False)
+                
+                # Display interim results (for showing feedback to the user)
+                if status == "interim":
+                    st.session_state.recognized_text = transcript
+                
+                # Handle final transcript (ready to send to chat)
+                if status == "final" and transcript:
+                    # Prevent duplicate processing
+                    if 'last_processed_transcript' not in st.session_state or st.session_state.last_processed_transcript != transcript:
+                        st.session_state.speech_to_send = transcript
+                        st.session_state.last_processed_transcript = transcript
+                        
+                        # Force immediate processing if needed
+                        if process_immediately:
+                            # Process the speech input
+                            text_to_send = st.session_state.speech_to_send
+                            st.session_state.speech_to_send = ""  # Clear after sending
+                            st.session_state.recognized_text = ""  # Clear recognized text too
+                            
+                            if text_to_send.strip():
+                                handle_user_input(text_to_send)
+                                st.rerun()  # Force a rerun to update the UI
+
 def main():
     """Main Streamlit app function."""
     st.set_page_config(
@@ -296,10 +346,7 @@ def main():
     # Initialize systems
     initialize_systems()
     
-    # Add the new sidebar speech recognition
-    initialize_sidebar_speech(handle_user_input)
-    
-    # Keep the original sidebar elements (but moved below speech recognition)
+    # Sidebar Elements
     with st.sidebar:
         # App title and description moved to sidebar
         st.title("Instructions")
@@ -313,14 +360,58 @@ def main():
         - "I want easy difficulty and start the review" to set difficulty and begin
         - Upload your PDF or PPTX files directly in the chat!
         """)
+
+        # Spacing to push speech recognition to the bottom
+        st.markdown("<br>" * 1, unsafe_allow_html=True)
+
+        # Add the speech recognition sidebar
+        render_speech_sidebar()
+
+    # Check if there's speech to process from the component that wasn't already processed
+    if hasattr(st.session_state, "speech_to_send") and st.session_state.speech_to_send:
+        text_to_send = st.session_state.speech_to_send
+        # Create a simple hash of the text for comparison
+        transcript_hash = hash(text_to_send.strip())
+        
+        # Only process if we haven't already processed this exact text
+        if not hasattr(st.session_state, "last_processed_hash") or st.session_state.last_processed_hash != transcript_hash:
+            st.session_state.last_processed_hash = transcript_hash
+            st.session_state.speech_to_send = ""  # Clear after sending
+            st.session_state.recognized_text = ""  # Clear recognized text too
+            
+            # Process the speech text
+            if text_to_send.strip():
+                handle_user_input(text_to_send)
+                st.rerun()  # Force a rerun to update the UI with the new message
     
-    # Special processing path when showing a spinner
+    # Special processing path
     if st.session_state.show_processing:
         display_chat_messages()
         
-        with st.chat_message("assistant"):
-            with st.spinner(st.session_state.processing_message):
-                generate_assistant_response()
+        with st.chat_message("assistant", avatar=gee_gee_avatar):
+            typing_container = st.empty()
+
+            if st.session_state.intent_handler.session.is_reviewing:
+                # Get the intent type from the latest user message
+                user_input = st.session_state.messages[-1]["content"]
+                intent_data = st.session_state.intent_classifier.classify(user_input)
+                intent_type = intent_data.get("intent", "unknown")
+                
+                # Check if the intent is not "answer" during a review session
+                if intent_type != "answer" and intent_type != "continue":
+                    typing_container.markdown("*...*")
+                elif st.session_state.intent_handler.session.current_question is not None and st.session_state.intent_handler.session.awaiting_feedback == False:
+                    typing_container.markdown("*Evaluating your answer...*")
+                else:
+                    typing_container.markdown("*Generating next question...*")
+            else:
+                typing_container.markdown("*...*")
+
+            generate_assistant_response()
+
+            # Clear the typing indicator before rerun
+            typing_container.empty()
+                
                 
         st.rerun()
 
@@ -353,18 +444,23 @@ def main():
         # Add a message showing that files were uploaded
         file_names = [file.name for file in user_input["files"]]
         files_str = ", ".join(file_names)
-        add_message("user", f"Uploaded: {files_str}")
         
         # Process each file
         for uploaded_file in user_input["files"]:
-            with st.spinner(f"Processing {uploaded_file.name}..."):
+            with st.chat_message("assistant", avatar=gee_gee_avatar):
+                typing_container = st.empty()
+                typing_container.markdown(f"*Processing {uploaded_file.name}...*")  # Or any subtle indicator you prefer
+
                 success = process_uploaded_file(uploaded_file, is_part_of_batch=(len(user_input["files"]) > 1))
                 if not success:
                     st.error(f"Failed to process {uploaded_file.name}")
+
+                # Clear the typing indicator before rerun
+                typing_container.empty()
         
         # Add a summary message for multiple files
         if len(user_input["files"]) > 1:
-            add_message("assistant", f"Processed {len(user_input['files'])} files. You can now start a review session with 'Start review' command.")
+            add_message("assistant", gee_gee_avatar, f"Processed {len(user_input['files'])} files. You can now start a review session with 'Start review' command.")
         # For single file uploads, provide guidance if not already provided
         elif len(user_input["files"]) == 1 and success:
             # If the last message was just a processing confirmation, replace it with guidance
@@ -372,7 +468,7 @@ def main():
                 st.session_state.messages[-1]["content"] += "\n\nWhat would you like to do next? You can:\n- Type 'Start review' to begin a review session\n- Type 'Show settings' to configure your review session\n- Upload more materials to include in your review"
             # If it was a different kind of message, add a new guidance message
             else:
-                add_message("assistant", "Now that your document is processed, you can:\n- Type 'Start review' to begin a review session\n- Type 'Show settings' to configure your review session\n- Upload more materials to include in your review")
+                add_message("assistant", gee_gee_avatar, "Now that your document is processed, you can:\n- Type 'Start review' to begin a review session\n- Type 'Show settings' to configure your review session\n- Upload more materials to include in your review")
         
         # Force a rerun to update the UI with new messages
         st.rerun()
