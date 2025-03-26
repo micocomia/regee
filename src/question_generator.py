@@ -13,29 +13,16 @@ class QuestionGenerator:
     """
     Generates high-quality educational questions based on document content using local LLMs.
     """
-    def __init__(self, retrieval_system, use_local_llm: bool = True, use_ollama: bool = True):
+    def __init__(self, retrieval_system, use_ollama: bool = True):
         """
         Initialize the question generator.
         
         Args:
             retrieval_system: RetrievalSystem for finding relevant document chunks
-            use_local_llm: Whether to try using local HuggingFace models
             use_ollama: Whether to try using Ollama LLMs
         """
         self.retrieval_system = retrieval_system
-        self.use_local_llm = use_local_llm
         self.use_ollama = use_ollama
-        
-        # Initialize local LLM capability
-        self.local_llm_available = False
-        if self.use_local_llm:
-            try:
-                import torch
-                from transformers import AutoModelForCausalLM, AutoTokenizer
-                self.local_llm_available = True
-                logger.info("Local LLM dependencies are available")
-            except ImportError:
-                logger.warning("Local LLM dependencies not available, will use alternatives")
         
         # Initialize Ollama capability if requested
         self.ollama_available = False
@@ -80,16 +67,7 @@ class QuestionGenerator:
                 # Determine which LLM to use based on availability
                 question_data = None
                 
-                # Try local LLM first if available
-                if self.local_llm_available and self.use_local_llm:
-                    try:
-                        logger.info(f"Attempting to generate question with local HuggingFace LLM")
-                        question_data = self._generate_with_local_llm(context_text, question_type, difficulty, topic)
-                    except Exception as e:
-                        logger.warning(f"Local LLM generation failed: {e}")
-                        question_data = None
-                
-                # Try Ollama next if available and local LLM failed
+                # Try Ollama if available
                 if question_data is None and self.ollama_available and self.use_ollama:
                     try:
                         logger.info(f"Attempting to generate question with Ollama")
@@ -281,77 +259,6 @@ class QuestionGenerator:
             self.ollama_available = False
             logger.warning(f"Ollama integration not available: {e}")
     
-    def _generate_with_local_llm(self, context: str, question_type: str, 
-                              difficulty: str, topic: Optional[str] = None) -> Dict[str, Any]:
-        """Generate a question using a locally hosted HuggingFace LLM."""
-        try:
-            from langchain import PromptTemplate
-            from langchain.llms import HuggingFacePipeline
-            from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-            import torch
-            
-            # Load a smaller model suitable for question generation
-            # You can replace this with models like:
-            # - "google/flan-t5-base" (more efficient)
-            # - "mistralai/Mistral-7B-Instruct-v0.1" (better quality but larger)
-            # - "TinyLlama/TinyLlama-1.1B-Chat-v1.0" (good balance of size/performance)
-            model_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"  # ~800MB
-            
-            # Create prompt based on question type and difficulty
-            if question_type == "multiple-choice":
-                prompt_template = self._create_mc_prompt(context, difficulty, topic)
-            else:
-                prompt_template = self._create_free_text_prompt(context, difficulty, topic)
-                
-            # Initialize tokenizer and model
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-            model = AutoModelForCausalLM.from_pretrained(
-                model_name, 
-                torch_dtype=torch.float16,  # Use half precision for memory efficiency
-                device_map="auto"  # Automatically use GPU if available
-            )
-            
-            # Create a text generation pipeline
-            text_pipeline = pipeline(
-                "text-generation",
-                model=model,
-                tokenizer=tokenizer,
-                max_new_tokens=512,
-                temperature=0.7,
-                top_p=0.95,
-                repetition_penalty=1.15
-            )
-            
-            # Create LangChain pipeline
-            llm = HuggingFacePipeline(pipeline=text_pipeline)
-            
-            # Generate response
-            response = llm(prompt_template)
-            
-            # Parse the response
-            question_text = response.strip()
-            
-            try:
-                # Try to parse structured JSON from response
-                if "{" in question_text and "}" in question_text:
-                    json_str = question_text[question_text.find("{"):question_text.rfind("}")+1]
-                    question_data = json.loads(json_str)
-                    
-                    # Add question type to the data
-                    question_data["type"] = question_type
-                    
-                    return question_data
-                else:
-                    # Manual parsing if no JSON structure found
-                    return self._parse_question_text(question_text, question_type)
-            except json.JSONDecodeError:
-                return self._parse_question_text(question_text, question_type)
-                
-        except ImportError as e:
-            logger.warning(f"Local LLM dependencies not available: {e}")
-            # Fall back to simpler method if dependencies aren't available
-            return self._generate_simple_question(context, question_type, difficulty)
-    
     def _generate_with_ollama(self, context: str, question_type: str, 
                             difficulty: str, topic: Optional[str] = None) -> Dict[str, Any]:
         """Generate a question using Ollama with improved JSON parsing."""
@@ -472,11 +379,11 @@ class QuestionGenerator:
         # Add specific instructions based on difficulty
         difficulty_specifics = ""
         if difficulty.lower() == "easy":
-            difficulty_specifics = "Focus on testing fundamental terminology, basic principles, or straightforward facts."
+            difficulty_specifics = "Focus on testing fundamental terminology, basic principles, or straightforward facts. For example, 'What is the meaning X?' or 'How would you explain Y?'"
         elif difficulty.lower() == "medium":
-            difficulty_specifics = "Focus on application of concepts, cause-and-effect relationships, or comparing and contrasting ideas."
+            difficulty_specifics = "Focus on application of concepts, cause-and-effect relationships, or comparing and contrasting ideas. For example, 'How can you apply X to Y?' or 'What are the key arguments presented in X, and how do they relate to each other?'"
         else:  # hard
-            difficulty_specifics = "Focus on analysis of complex scenarios, evaluation of approaches, predictive outcomes, or synthesizing information across multiple concepts."
+            difficulty_specifics = "Focus on analysis of complex scenarios, evaluation of approaches, predictive outcomes, or synthesizing information across multiple concepts. For example, 'What are the strengths and weaknesses of X?' or 'How would you improve Y?'"
 
         # Clean and sanitize the context
         # Remove any control characters and ensure JSON-safe strings
@@ -1165,77 +1072,6 @@ class QuestionGenerator:
         # Prepare context text
         context_text = "\n\n".join([ctx['content'] for ctx in contexts])
         print(f"Combined context length: {len(context_text)} characters")
-        
-        # Try each generation method
-        if self.local_llm_available and self.use_local_llm:
-            print("\n=== Attempting local LLM generation ===")
-            try:
-                from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
-                import torch
-                
-                # Check model type and name
-                model_name = "google/flan-t5-base"  # Modify as needed for your setup
-                print(f"Using model: {model_name}")
-                
-                # Create prompt
-                if question_type == "multiple-choice":
-                    prompt = self._create_mc_prompt(context_text, difficulty, topic)
-                else:
-                    prompt = self._create_free_text_prompt(context_text, difficulty, topic)
-                
-                print(f"Prompt length: {len(prompt)} characters")
-                print("Prompt sample:", prompt[:100], "...")
-                
-                # Initialize model
-                print("Loading tokenizer...")
-                tokenizer = AutoTokenizer.from_pretrained(model_name)
-                
-                print("Loading model...")
-                model = AutoModelForSeq2SeqLM.from_pretrained(
-                    model_name, 
-                    torch_dtype=torch.float16,
-                    device_map="auto"
-                )
-                
-                print("Creating pipeline...")
-                text_pipeline = pipeline(
-                    "text2text-generation",
-                    model=model,
-                    tokenizer=tokenizer,
-                    max_length=512,
-                    temperature=0.7,
-                    do_sample=True,
-                    top_p=0.95
-                )
-                
-                print("Generating text...")
-                generation_output = text_pipeline(prompt, return_full_text=False)[0]
-                response = generation_output["generated_text"]
-                
-                print(f"Generation successful! Output length: {len(response)} characters")
-                print("Output sample:", response[:100], "...")
-                
-                # Parse output
-                question_data = self._parse_question_text(response, question_type)
-                print(f"Parsed output into question data with type: {question_data.get('type')}")
-                
-                # Validate
-                is_valid, reason = self._validate_question(question_data)
-                if is_valid:
-                    print("Question validation passed!")
-                    return question_data
-                else:
-                    print(f"Question validation failed: {reason}")
-                    print("Attempting to fix...")
-                    fixed_question = self._fix_invalid_question(question_data, reason)
-                    return fixed_question
-            
-            except Exception as e:
-                print(f"Error in local LLM generation: {str(e)}")
-                print("Full traceback:")
-                traceback.print_exc()
-        else:
-            print("\nSkipping local LLM (not available or disabled)")
         
         if self.ollama_available and self.use_ollama:
             print("\n=== Attempting Ollama generation ===")

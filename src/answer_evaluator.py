@@ -19,34 +19,16 @@ class AnswerEvaluator:
 
     def __init__(self,
                  llm_backend: str = "similarity",
-                 use_local_llm: bool = True,
                  use_ollama: bool = True):
         """
         Initialize the answer evaluator.
 
         Args:
             llm_backend: LLM backend to use ('local', 'ollama', or 'similarity')
-            use_local_llm: Whether to try using local TinyLLama model
             use_ollama: Whether to try using Ollama LLMs
         """
         self.llm_backend = llm_backend.lower()
-        self.use_local_llm = use_local_llm
         self.use_ollama = use_ollama
-
-        # Initialize local LLM capability
-        self.local_llm_available = False
-        if self.use_local_llm:
-            try:
-                import torch
-                from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
-                self.local_llm_available = True
-                logger.info("Local LLM dependencies are available")
-
-                # Set up local model if explicitly requested as backend
-                if self.llm_backend == "local":
-                    self._setup_local_llm()
-            except ImportError:
-                logger.warning("Local LLM dependencies not available, will use alternatives")
 
         # Initialize Ollama capability if requested
         self.ollama_available = False
@@ -61,39 +43,6 @@ class AnswerEvaluator:
         # Always set up the similarity model as a fallback
         self.similarity_model = SentenceTransformer("all-MiniLM-L6-v2")
         logger.info(f"Using {self.llm_backend} backend for answer evaluation")
-
-    def _setup_local_llm(self):
-        """Setup the local LLM using TinyLLama model."""
-        try:
-            import torch
-            from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-
-            # Load TinyLLama model suitable for answer evaluation
-            model_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"  # ~800MB
-
-            # Initialize tokenizer and model
-            self.local_tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.local_model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                torch_dtype=torch.float16,  # Use half precision for memory efficiency
-                device_map="auto"  # Automatically use GPU if available
-            )
-
-            # Create a text generation pipeline
-            self.local_pipeline = pipeline(
-                "text-generation",
-                model=self.local_model,
-                tokenizer=self.local_tokenizer,
-                max_new_tokens=512,
-                temperature=0.1,  # Low temperature for consistent evaluations
-                top_p=0.95,
-                repetition_penalty=1.15
-            )
-
-            logger.info(f"Local LLM setup complete with TinyLLama model")
-        except Exception as e:
-            logger.error(f"Error setting up local LLM: {str(e)}")
-            self.local_llm_available = False
 
     def _setup_ollama_llm(self):
         """Setup the Ollama LLM integration."""
@@ -139,18 +88,9 @@ class AnswerEvaluator:
             # For free-text questions, use the selected backend
             try:
                 # Determine which LLM to use based on backend selection and availability
-                if self.llm_backend == "local" and self.local_llm_available:
-                    return self._evaluate_with_local_llm(question, user_answer)
-                elif self.llm_backend == "ollama" and self.ollama_available:
+                if self.llm_backend == "ollama" and self.ollama_available:
                     return self._evaluate_with_ollama(question, user_answer)
                 else:
-                    # If none of the preferred backends are available, try local and Ollama
-                    if self.local_llm_available and self.use_local_llm:
-                        try:
-                            return self._evaluate_with_local_llm(question, user_answer)
-                        except Exception as e:
-                            logger.warning(f"Local LLM evaluation failed: {e}")
-
                     if self.ollama_available and self.use_ollama:
                         try:
                             return self._evaluate_with_ollama(question, user_answer)
@@ -198,84 +138,6 @@ class AnswerEvaluator:
             "user_answer": user_answer,
             "correct_answer": correct_answer
         }
-
-    def _evaluate_with_local_llm(self, question: Dict[str, Any], user_answer: str) -> Dict[str, Any]:
-        """Evaluate free-text answer using the local TinyLLama model."""
-        try:
-            reference_answer = question.get("answer", "")
-            key_points = question.get("key_points", [])
-
-            # Create a prompt for the model
-            prompt = f"""
-            You are an expert educational evaluator. Assess this student answer with care and fairness.
-
-            Question: {question.get('question', '')}
-
-            Reference Answer: {reference_answer}
-
-            Key Points That Should Be Included:
-            {' '.join([f'- {point}' for point in key_points])}
-
-            Student's Answer: {user_answer}
-
-            Evaluate the student's answer based on the reference answer and key points. Provide:
-            1. Is the answer correct (Yes/No/Partially)?
-            2. Feedback explaining the evaluation. Address the student directly in your feedback.
-
-            IMPORTANT REQUIREMENTS:
-            1. Do NOT add ANY introductory text.
-            2. The output must be in valid JSON format only.
-            3. Start your response with the opening curly brace '{{' and end with a closing curly brace '}}'.
-            4. Do not add any explanatory text before or after the JSON.
-            5. Ensure that the feedback is informative but concise.
-    
-            JSON OUTPUT REQUIREMENTS:
-            {{
-                "is_correct": true/false,
-                "feedback": "Your feedback here"
-            }}
-            """
-
-            # Generate text with the model
-            outputs = self.local_pipeline(prompt, return_full_text=False)
-            response = outputs[0]['generated_text'].strip()
-
-            # Try to parse structured JSON from response
-            if "{" in response and "}" in response:
-                json_str = response[response.find("{"):response.rfind("}") + 1]
-                try:
-                    evaluation = json.loads(json_str)
-
-                    # Ensure required fields
-                    if "is_correct" not in evaluation:
-                        evaluation["is_correct"] = "yes" in response.lower() or "correct" in response.lower()
-                    if "feedback" not in evaluation:
-                        evaluation["feedback"] = response
-
-                    return evaluation
-                except json.JSONDecodeError:
-                    # Handle JSON parsing errors
-                    pass
-
-            # Simple parsing if JSON parsing failed
-            is_correct = "yes" in response.lower() or "correct" in response.lower()
-            # Check for "partially" or "not entirely" to handle partial credit
-            is_partially_correct = "partially" in response.lower() or "not entirely" in response.lower()
-
-            if is_partially_correct:
-                is_correct = False  # If partially correct, it's not fully correct
-
-            return {
-                "is_correct": is_correct,
-                "is_partially_correct": is_partially_correct,
-                "feedback": response,
-                "user_answer": user_answer,
-                "reference_answer": reference_answer
-            }
-
-        except Exception as e:
-            logger.error(f"Error in local LLM evaluation: {str(e)}")
-            return self._evaluate_with_similarity(question, user_answer)
 
     def _evaluate_with_ollama(self, question: Dict[str, Any], user_answer: str) -> Dict[str, Any]:
         """Evaluate free-text answer using Ollama."""
@@ -532,36 +394,6 @@ class AnswerEvaluator:
             return debug_info
 
         # For free-text, try different evaluation methods
-
-        # Try local LLM first if available
-        if self.local_llm_available and self.use_local_llm:
-            print("\n=== Attempting local LLM evaluation ===")
-            try:
-                local_result = self._evaluate_with_local_llm(question, user_answer)
-                print(f"Local LLM evaluation result: {'Correct' if local_result.get('is_correct') else 'Incorrect'}")
-                print(f"Feedback sample: {local_result.get('feedback', '')[:100]}...")
-                debug_info["evaluation_attempts"].append({
-                    "method": "local_llm",
-                    "result": local_result,
-                    "success": True
-                })
-
-                # If we're using local LLM as the primary backend, use this result
-                if self.llm_backend == "local":
-                    debug_info["final_evaluation"] = local_result
-                    print("\n=== ANSWER EVALUATION DEBUGGING COMPLETE ===")
-                    return debug_info
-            except Exception as e:
-                print(f"Local LLM evaluation failed: {str(e)}")
-                traceback.print_exc()
-                debug_info["evaluation_attempts"].append({
-                    "method": "local_llm",
-                    "error": str(e),
-                    "success": False
-                })
-        else:
-            print("\nSkipping local LLM (not available or disabled)")
-
         # Try Ollama if available
         if self.ollama_available and self.use_ollama:
             print("\n=== Attempting Ollama evaluation ===")

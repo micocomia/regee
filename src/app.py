@@ -20,6 +20,7 @@ from intent_handler import IntentHandlerManager, SessionState
 from question_generator import QuestionGenerator
 from answer_evaluator import AnswerEvaluator
 from speech_recognition import speech_recognition
+from text_to_speech import init_tts_in_session_state, speak_response
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -47,6 +48,7 @@ if 'initialized' not in st.session_state:
     st.session_state.speech_sidebar_enabled = False
     st.session_state.recognized_text = ""
     st.session_state.speech_to_send = ""
+    st.session_state.pending_speech = None
 
 def initialize_systems():
     """Initialize all the required systems."""
@@ -57,8 +59,8 @@ def initialize_systems():
     # Document Processor
     st.session_state.document_processor = DocumentProcessor(
         embedding_model="all-MiniLM-L6-v2",
-        chunk_size=300,
-        chunk_overlap=50
+        chunk_size=500,
+        chunk_overlap=50,
     )
     
     # Vector store for document storage
@@ -75,14 +77,12 @@ def initialize_systems():
     # Question Generator
     st.session_state.question_generator = QuestionGenerator(
         retrieval_system=st.session_state.retrieval_system,
-        use_local_llm=False,
         use_ollama=True
     )
 
     # Answer evaluator
     st.session_state.answer_evaluator = AnswerEvaluator(
         llm_backend='ollama',
-        use_local_llm=False,
         use_ollama=True
     )
         
@@ -97,11 +97,15 @@ def initialize_systems():
         answer_evaluator=st.session_state.answer_evaluator,
     )
     
+    # Text To Speech
+    init_tts_in_session_state() 
+
     # Set speech state
-    st.session_state.intent_handler.session.speech_enabled = st.session_state.speech_enabled
+    #st.session_state.intent_handler.session.speech_enabled = st.session_state.speech_enabled
     
     st.session_state.initialized = True
     logger.info("All systems initialized")
+
 
 def add_message(role: str, avatar: str, content: str, **kwargs):
     """Add a message to the conversation history."""
@@ -173,6 +177,17 @@ def generate_assistant_response():
         
         # Add assistant message to history with any special data
         add_message("assistant", gee_gee_avatar, response.get("text", "I'm not sure how to respond to that."), **message_kwargs)
+
+        # Store the response text to speak after UI update
+        response_text = response.get("text", "I'm not sure how to respond to that.")
+        st.session_state.pending_speech = response_text
+
+        # Reset processing indicators
+        st.session_state.show_processing = False
+
+        # Force a rerun to update the UI with the message first
+        st.rerun()
+        
     except Exception as e:
         # Handle errors gracefully
         logger.error(f"Error processing response: {str(e)}")
@@ -180,6 +195,8 @@ def generate_assistant_response():
     finally:
         # Reset processing indicators
         st.session_state.show_processing = False
+
+        
 
 def process_uploaded_file(uploaded_file, is_part_of_batch=False):
     """
@@ -289,6 +306,15 @@ def display_chat_messages():
 def render_speech_sidebar():
     """Render the speech recognition sidebar component using streamlined_custom_component"""
     with st.sidebar:
+        # Add a simple TTS toggle (since we removed complex controls)
+        st.subheader("Text-to-Speech")
+        tts_enabled = st.toggle("Enable Text-to-Speech", value=st.session_state.tts.is_enabled)
+        
+        if tts_enabled:
+            st.session_state.tts.enable()
+        else:
+            st.session_state.tts.disable()
+
         st.subheader("Speech Recognition")
         
         # Toggle for enabling/disabling
@@ -418,11 +444,16 @@ def main():
     # Display chat messages or placeholder if no messages
     if st.session_state.messages:
         display_chat_messages()
+        
+        # Check if there's pending speech and speak it after UI update
+        if hasattr(st.session_state, 'pending_speech') and st.session_state.pending_speech:
+            speak_response(st.session_state.pending_speech)
+            st.session_state.pending_speech = None  # Clear after speaking
     else:
         # Display a placeholder when no conversation has started
         st.markdown("""
         <div style="display: flex; justify-content: center; align-items: center; height: 60vh; text-align: center;">
-            <div style="padding: 2rem; border-radius: 0.5rem; background-color: #f8f9fa; max-width: 600px;">
+            <div style="padding: 2rem; border-radius: 0.5rem; background-color: #8F001A; font-color: white; max-width: 600px;">
                 <h2>Start chatting with ReGee</h2>
                 <p>Upload your learning materials or ask a question to begin.</p>
             </div>

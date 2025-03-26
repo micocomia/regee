@@ -28,7 +28,7 @@ class IntentHandlerManager:
     Manager for intent handlers that routes intents to appropriate handler functions.
     """
     def __init__(self, retrieval_system=None, question_generator=None, answer_evaluator=None, 
-                 speech_recognition=None, tts_system=None, document_processor=None):
+                 speech_recognition=None, text_to_speech=None, document_processor=None):
         """
         Initialize the intent handler manager.
         
@@ -37,7 +37,7 @@ class IntentHandlerManager:
             question_generator: System for generating questions
             answer_evaluator: System for evaluating answers
             speech_recognition: Speech recognition system
-            tts_system: Text-to-speech system
+            text_to_speech: Text-to-speech system
             document_processor: System for processing documents
         """
         self.session = SessionState()
@@ -45,7 +45,7 @@ class IntentHandlerManager:
         self.question_generator = question_generator
         self.answer_evaluator = answer_evaluator
         self.speech_recognition = speech_recognition
-        self.tts_system = tts_system
+        self.text_to_speech = text_to_speech
         self.document_processor = document_processor
         
         # Map intent types to handlers
@@ -205,8 +205,7 @@ class IntentHandlerManager:
                           f"• Question Type: {question_type_display}\n\n" + \
                           f"• Number of Questions: {self.session.num_questions}\n\n" + \
                           f"• Difficulty: {difficulty_display}\n\n" + \
-                          f"• Topics: {topics_text}\n\n" + \
-                          f"• Speech Recognition: {'Enabled' if self.session.speech_enabled else 'Disabled'}"
+                          f"• Topics: {topics_text}\n\n"
         
         if not self.session.documents_loaded:
             settings_message += "\n\nNote: No documents have been loaded yet. Please upload a document to start a review."
@@ -276,7 +275,7 @@ class IntentHandlerManager:
         """Handle answer intent."""
         if not self.session.is_reviewing:
             return {
-                "text": "We're not currently in a review session. Would you like to start one?",
+                "text": "Hi! I'm ReGee, a study assistant. Say something like 'start review' to start reviewing your documents.",
                 "intent": "answer"
             }
             
@@ -532,6 +531,24 @@ class IntentHandlerManager:
             "intent": "disable_speech"
         }
     
+    def handle_out_of_scope(self, intent_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle intents that are outside the purpose of the study assistant.
+        
+        This method provides a consistent response for queries unrelated to 
+        document review and study preparation.
+        """
+        return {
+            "text": "I'm a study assistant focused on helping you review document contents. " + 
+                    "I can help you with:\n\n" +
+                    "• Uploading documents\n" +
+                    "• Generating review questions\n" +
+                    "• Testing your knowledge\n" +
+                    "• Adjusting review settings\n\n" +
+                    "What documents would you like to review?",
+            "intent": "out_of_scope"
+        }
+
     def handle_unknown_intent(self, intent_data: Dict[str, Any]) -> Dict[str, Any]:
         """Handle unknown intent."""
         return {

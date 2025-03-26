@@ -111,6 +111,22 @@ class IntentClassifier:
                 r'\b(next question|another question|ask another|ask next)\b',
                 r'^(ok|okay|sure|yes|yep|yeah|y|alright|fine|ready|got it)\b'
             ],
+
+            "out_of_scope": [
+                r'\b(who|what|where|when|why|how).{1,30}(world|universe|life|economy|politics|news|weather)\b',
+                r'\b(tell|explain|describe).{1,20}(yourself|history|science|math|physics|chemistry|biology)\b',
+                r'\b(what).{1,5}(is|are).{1,20}(meaning|purpose|goal|objective).{1,10}(life|universe|existence)\b',
+                r'\b(browse|search|find|google|look up|navigate).{1,20}(internet|web|online)\b',
+                r'\b(write|create|generate).{1,20}(program|app|application|website|code).{1,20}(not|unrelated).{1,20}(document|study|review)\b',
+                r'\b(analyze|process|examine).{1,20}(data|information|statistics).{1,20}(not|unrelated).{1,20}(document|study|review)\b'
+            ],
+
+            # New: Unknown intent patterns - this is a fallback with broader patterns for ambiguous requests
+            "unknown": [
+                r'\b(help|assist|do something|not sure|confused|lost)\b',
+                r'^(?!.*\b(review|document|speech|question|topic|difficulty|setting)\b).*\b(what|how|can you|would you|could you)\b.*$',
+                r'^(?!.*\b(upload|start|stop|status|setting|question|topic|difficulty|speech)\b).*\b(do|work|function|capability)\b.*$'
+            ]
         }
     
     def classify(self, text: str) -> Dict[str, Any]:
@@ -171,8 +187,27 @@ class IntentClassifier:
             else:
                 print(f"No intent match for sentence: '{sentence}'")
         
-        # If no intents were detected, return answer intent
+        # If no intents were detected in sentences, check for out-of-scope or unknown intents
         if not detected_intents:
+            # Check if the text matches out-of-scope patterns
+            for pattern in self.patterns["out_of_scope"]:
+                if re.search(pattern, text, re.IGNORECASE):
+                    return {
+                        "intent": "out_of_scope",
+                        "text": text,
+                        "additional_intents": []
+                    }
+            
+            # Check if the text matches unknown intent patterns
+            for pattern in self.patterns["unknown"]:
+                if re.search(pattern, text, re.IGNORECASE):
+                    return {
+                        "intent": "unknown",
+                        "text": text,
+                        "additional_intents": []
+                    }
+            
+            # If still no match, return the default answer intent
             return result
             
         # Process detected intents
@@ -260,7 +295,22 @@ class IntentClassifier:
                 context_scores[context_type] += 1
             elif context_type == "settings" and re.search(r'\b(change|adjust|modify|set)\b', text, re.IGNORECASE):
                 context_scores[context_type] += 1
-                
+         
+        # Add context detection for out-of-scope queries
+        out_of_scope_keywords = [
+            r'\b(news|weather|sports|politics|economy|stock|crypto|bitcoin)\b',
+            r'\b(meaning of life|universe|philosophy|religion|beliefs)\b',
+            r'\b(tell me about yourself|who are you|how do you work|what can you do)\b',
+            r'\b(search|find|browse|google|web|internet)\b'
+        ]
+
+        for pattern in out_of_scope_keywords:
+            if re.search(pattern, text, re.IGNORECASE):
+                # If we detect out-of-scope keywords, reduce the scores of other contexts
+                for key in context_scores:
+                    context_scores[key] -= 1
+                break
+
         return context_scores
     
     def _split_into_sentences(self, text: str) -> List[str]:
@@ -447,5 +497,13 @@ class IntentClassifier:
         
         elif intent == "answer":
             result["answer"] = text
+
+        elif intent == "out_of_scope":
+            # For out of scope intent, we don't need to extract any specific data
+            pass
+            
+        elif intent == "unknown":
+            # For unknown intent, we don't need to extract any specific data
+            pass
             
         return result

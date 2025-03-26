@@ -147,18 +147,6 @@ class RetrievalSystem:
         quality_results = []
         for result in unique_results:
             content = result["content"]
-            
-            # # Skip contexts that are too short or likely non-informative
-            # if len(content.strip()) < 100:
-            #     continue
-                
-            # Skip contexts that are just metadata or references
-            # if content.count("\n") > content.count(". ") * 2:
-            #     continue
-                
-            # # Skip contexts that likely contain image captions only
-            # if content.count("[IMAGE") > 2 and len(content) < 300:
-            #     continue
                 
             # Contexts with bullets/numbers likely contain good educational content
             has_bullets = any(line.strip().startswith(("•", "-", "*", "1.", "2.")) for line in content.split("\n"))
