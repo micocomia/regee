@@ -552,7 +552,7 @@ class IntentHandlerManager:
     def handle_unknown_intent(self, intent_data: Dict[str, Any]) -> Dict[str, Any]:
         """Handle unknown intent."""
         return {
-            "text": "I'm not sure what you want to do. You can upload documents, start/stop a review, " + 
+            "text": "I can't help you with that. You can upload documents, start/stop a review, " + 
                     "answer questions, check your status, or adjust the review settings.",
             "intent": "unknown"
         }

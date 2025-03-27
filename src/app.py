@@ -9,7 +9,6 @@ import re
 import hashlib
 import asyncio
 from streamlit.components.v1 import html
-from streamlined_custom_component import create_component
 from typing import Dict, Any, List, Optional
 
 # Import components
@@ -457,7 +456,7 @@ def main():
         # Display a placeholder when no conversation has started
         st.markdown("""
         <div style="display: flex; justify-content: center; align-items: center; height: 60vh; text-align: center;">
-            <div style="padding: 2rem; border-radius: 0.5rem; background-color: #8F001A; font-color: white; max-width: 600px;">
+            <div style="padding: 2rem; border-radius: 0.5rem; background-color: #8F001A; color: white; max-width: 600px;">
                 <h2>Start chatting with ReGee</h2>
                 <p>Upload your learning materials or ask a question to begin.</p>
             </div>

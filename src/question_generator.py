@@ -5,9 +5,11 @@ import random
 import requests
 import traceback  # Add this at the top
 from typing import List, Dict, Any, Optional, Tuple
+from dotenv import load_dotenv
 import logging
 
 logger = logging.getLogger(__name__)
+load_dotenv()
 
 class QuestionGenerator:
     """
@@ -582,11 +584,11 @@ class QuestionGenerator:
         # Add specific instructions based on difficulty
         difficulty_specifics = ""
         if difficulty.lower() == "easy":
-            difficulty_specifics = "Focus on testing fundamental terminology, basic principles, or straightforward facts. For example, 'What is the meaning X?' or 'How would you explain Y?'"
+            difficulty_specifics = "Focus on testing fundamental terminology, basic principles, or straightforward facts. For example, 'What is the meaning X?' or 'How would you explain Y?'. Create options based on real terms but are fundamentally different from the correct answer."
         elif difficulty.lower() == "medium":
-            difficulty_specifics = "Focus on application of concepts, cause-and-effect relationships, or comparing and contrasting ideas. For example, 'How can you apply X to Y?' or 'What are the key arguments presented in X, and how do they relate to each other?'"
+            difficulty_specifics = "Focus on application of concepts, cause-and-effect relationships, or comparing and contrasting ideas. For example, 'How can you apply X to Y?' or 'What are the key arguments presented in X, and how do they relate to each other?'. Create options based on 1) real terms but are fundamentally different from the correct answer, 2) real terms that are close to the actual answer, or 3) all options are correct (i.e., all of the above). "
         else:  # hard
-            difficulty_specifics = "Focus on analysis of complex scenarios, evaluation of approaches, predictive outcomes, or synthesizing information across multiple concepts. For example, 'What are the strengths and weaknesses of X?' or 'How would you improve Y?'"
+            difficulty_specifics = "Focus on analysis of complex scenarios, evaluation of approaches, predictive outcomes, or synthesizing information across multiple concepts. For example, 'What are the strengths and weaknesses of X?' or 'How would you improve Y?'. Create options based on 1) real terms but are fundamentally different from the correct answer or 2) real terms that are close to the actual answer, 3) made up terms that seem plausible, 4) all options are correct (i.e., all of the above), or 5) all options are incorrect (i.e., none of the above)."
 
         # Clean and sanitize the context
         # Remove any control characters and ensure JSON-safe strings
@@ -607,8 +609,8 @@ class QuestionGenerator:
         3. Start your response with the opening curly brace '{{' and end with a closing curly brace '}}'.
         4. Do not add any explanatory text before or after the JSON.
         5. The question should focus on substantive, meaningful content that demonstrates understanding
-        6. DO NOT create questions about author names, paper titles, dates, or superficial information
-        7. DO NOT create simple fill-in-the-blank questions that just remove a single word from a sentence
+        6. DO NOT create questions about author names, paper titles, dates, or superficial information when the difficulty is not set to easy.
+        7. DO NOT create simple fill-in-the-blank questions that just remove a single word from a sentence when the difficulty is not set to easy.
         8. All answer options should be plausible and of similar length and style
         9. The question should be clear, unambiguous, and test important concepts
         10. Include a concise explanation that not only explains the correct answer but also why other options are incorrect
@@ -1100,20 +1102,20 @@ class QuestionGenerator:
             return False, "Question text is too short or empty"
         
         # Check for questions that are just fragments from the content
-        if "______" in question_text and question_type == "multiple-choice":
-            # Check if this is just a fill-in-the-blank with a single word
-            if question_text.count("______") == 1 and "Complete the following" in question_text:
-                return False, "Simple fill-in-the-blank questions are not educational enough"
+        # if "______" in question_text and question_type == "multiple-choice":
+        #     # Check if this is just a fill-in-the-blank with a single word
+        #     if question_text.count("______") == 1 and "Complete the following" in question_text:
+        #         return False, "Simple fill-in-the-blank questions are not educational enough"
         
         # Check for questions about superficial details (like author names)
-        name_patterns = ["who wrote", "author", "who published", "wrote the", "created by"]
-        if any(pattern in question_text.lower() for pattern in name_patterns):
-            return False, "Questions about authorship are not substantive enough"
+        # name_patterns = ["who wrote", "author", "who published", "wrote the", "created by"]
+        # if any(pattern in question_text.lower() for pattern in name_patterns):
+        #     return False, "Questions about authorship are not substantive enough"
             
         # Check for date-focused questions
-        date_patterns = ["what year", "when was", "which date", "was published in"]
-        if any(pattern in question_text.lower() for pattern in date_patterns):
-            return False, "Questions focused on dates are not substantive enough"
+        # date_patterns = ["what year", "when was", "which date", "was published in"]
+        # if any(pattern in question_text.lower() for pattern in date_patterns):
+        #     return False, "Questions focused on dates are not substantive enough"
         
         # Multiple-choice specific validations
         if question_type == "multiple-choice":

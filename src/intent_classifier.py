@@ -121,7 +121,6 @@ class IntentClassifier:
                 r'\b(analyze|process|examine).{1,20}(data|information|statistics).{1,20}(not|unrelated).{1,20}(document|study|review)\b'
             ],
 
-            # New: Unknown intent patterns - this is a fallback with broader patterns for ambiguous requests
             "unknown": [
                 r'\b(help|assist|do something|not sure|confused|lost)\b',
                 r'^(?!.*\b(review|document|speech|question|topic|difficulty|setting)\b).*\b(what|how|can you|would you|could you)\b.*$',

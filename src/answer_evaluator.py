@@ -6,9 +6,11 @@ import requests
 import traceback
 from typing import Dict, Any, List, Optional, Union, Tuple
 import numpy as np
+from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer, util
 
 logger = logging.getLogger(__name__)
+load_dotenv()
 
 
 class AnswerEvaluator:
