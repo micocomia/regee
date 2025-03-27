@@ -336,7 +336,7 @@ class IntentHandlerManager:
                 self.session.is_reviewing = False
                 
                 return {
-                    "text": f"{evaluation['feedback']} That completes our review session. You answered {correct} out of {total} questions correctly ({accuracy:.1f}%).",
+                    "text": f"{evaluation['feedback']}\n\nThat completes our review session. You answered {correct} out of {total} questions correctly ({accuracy:.1f}%).",
                     "session_summary": {
                         "correct": correct,
                         "total": total,

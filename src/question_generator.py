@@ -23,12 +23,21 @@ class QuestionGenerator:
         """
         self.retrieval_system = retrieval_system
         self.use_ollama = use_ollama
+        self.question_history = []  # Track previous questions
+        self.used_contexts = set()  # Track previously used contexts
+        
+        # Track topic usage
+        self.used_topics = {}  # Dictionary to track topic usage frequency
+        self.recently_used_contexts = []  # List to track recently used context IDs in order
+        self.context_topics = {}  # Map context IDs to their primary topics
         
         # Initialize Ollama capability if requested
         self.ollama_available = False
         if self.use_ollama:
             self._setup_ollama_llm()
     
+
+
     def generate_question(self, topics: Optional[List[str]] = None, 
                          question_type: str = "multiple-choice",
                          difficulty: str = "medium") -> Dict[str, Any]:
@@ -47,18 +56,33 @@ class QuestionGenerator:
         max_attempts = 3
         
         for attempt in range(max_attempts):
-            # Retrieve relevant contexts for the question
-            topic = random.choice(topics) if topics and len(topics) > 0 else None
+            # Initialize topic - ensure it's always defined
+            topic = None
             
+            # Retrieve relevant contexts for the question
+            if topics and len(topics) > 0:
+                topic = random.choice(topics)
+                
             # Use the improved context retrieval
             contexts = self.retrieval_system.retrieve_for_question_generation(
                 topic=topic, 
-                num_contexts=100
+                num_contexts=10
             )
-            
+        
             if not contexts:
                 # Fallback for no contexts
                 return self._generate_fallback_question(question_type)
+            
+            # Extract key topic from contexts for tracking
+            context_key_topics = self._extract_key_topics_from_contexts(contexts[:5])
+            context_key_topic = context_key_topics[0] if context_key_topics else topic
+
+            # Check if this context topic has been overused recently
+            if self._is_topic_overused(context_key_topic):
+                # If we're on the last attempt, proceed anyway
+                if attempt < max_attempts - 1:
+                    logger.warning(f"Topic '{context_key_topic}' has been overused recently, trying again")
+                    continue
             
             # Prepare context text for the LLM
             context_text = "\n\n".join([ctx['content'] for ctx in contexts])
@@ -82,9 +106,28 @@ class QuestionGenerator:
                     question_data = self._generate_simple_question(context_text, question_type, difficulty)
                 
                 # Validate the question
-                is_valid, reason = self._validate_question(question_data)
-                
+                is_valid, reason = self._validate_question(question_data)       
+
                 if is_valid:
+                    # Update topic usage stats
+                    for topic in context_key_topics:
+                        self.used_topics[topic] = self.used_topics.get(topic, 0) + 1
+                    
+                    # Update recently used contexts
+                    for ctx in contexts[:3]:
+                        self.recently_used_contexts.insert(0, ctx["id"])
+                        # Ensure we don't track too many
+                        if len(self.recently_used_contexts) > 100:
+                            self.recently_used_contexts = self.recently_used_contexts[:100]
+                        
+                        # Map contexts to their topics
+                        self.context_topics[ctx["id"]] = context_key_topics
+
+                    # Check if this question is too similar to previous ones
+                    if self._is_duplicate_question(question_data):
+                        logger.warning("Generated question is too similar to previous ones, trying again")
+                        continue
+                    
                     logger.info(f"Generated valid {question_type} question on attempt {attempt+1}")
                     # Add metadata about generation method
                     if "metadata" not in question_data:
@@ -92,26 +135,48 @@ class QuestionGenerator:
                     question_data["metadata"]["difficulty"] = difficulty
                     if topic:
                         question_data["metadata"]["topic"] = topic
+                    
+                    # Store question in history and track used contexts
+                    self.question_history.append(question_data)
+                    for ctx in contexts[:3]:  # Store the top contexts to avoid reusing
+                        self.used_contexts.add(ctx["id"])
+                    
+                    # Limit history size to prevent memory issues
+                    if len(self.question_history) > 50:
+                        self.question_history = self.question_history[-50:]
+                    if len(self.used_contexts) > 200:
+                        self.used_contexts = set(list(self.used_contexts)[-200:])
+                    
                     return question_data
                 else:
                     logger.warning(f"Question validation failed on attempt {attempt+1}: {reason}")
-                    
+                        
                     # If last attempt, try to fix the question instead of generating a new one
                     if attempt == max_attempts - 1:
                         logger.info("Attempting to fix invalid question on final attempt")
                         question_data = self._fix_invalid_question(question_data, reason)
+                        
+                        # Store the fixed question
+                        if not self._is_duplicate_question(question_data):
+                            self.question_history.append(question_data)
+                            for ctx in contexts[:3]:
+                                self.used_contexts.add(ctx["id"])
+                        
                         return question_data
-            
+                
             except Exception as e:
                 logger.error(f"Error generating question on attempt {attempt+1}: {str(e)}")
                 
                 # On last attempt, return fallback
                 if attempt == max_attempts - 1:
-                    return self._generate_fallback_question(question_type)
+                    fallback = self._generate_fallback_question(question_type)
+                    
+                    # Don't store fallback questions in history
+                    return fallback
         
         # Shouldn't reach here, but just in case
         return self._generate_fallback_question(question_type)
-    
+
     def generate_knowledge_check(self, document_id: str, num_questions: int = 5) -> List[Dict[str, Any]]:
         """
         Generate a complete knowledge check assessment from a specific document.
@@ -366,7 +431,145 @@ class QuestionGenerator:
         except Exception as e:
             logger.error(f"Error with Ollama generation: {str(e)}")
             return self._generate_simple_question(context, question_type, difficulty)
+
+    def _is_duplicate_question(self, question_data: Dict[str, Any]) -> bool:
+        """
+        Check if a question is too similar to previously generated questions.
         
+        Args:
+            question_data: The question to check
+            
+        Returns:
+            True if the question is a duplicate, False otherwise
+        """
+        if not self.question_history:
+            return False
+        
+        new_question = question_data.get("question", "").lower()
+        
+        # Quick exact match check
+        for prev_question in self.question_history:
+            prev_question_text = prev_question.get("question", "").lower()
+            if new_question == prev_question_text:
+                return True
+        
+        # Check for high similarity (using word overlap as a simple metric)
+        new_words = set(new_question.split())
+        
+        for prev_question in self.question_history:
+            prev_question_text = prev_question.get("question", "").lower()
+            prev_words = set(prev_question_text.split())
+            
+            # Calculate Jaccard similarity
+            if new_words and prev_words:
+                intersection = new_words.intersection(prev_words)
+                union = new_words.union(prev_words)
+                similarity = len(intersection) / len(union)
+                
+                # If more than 70% similar, consider it a duplicate
+                if similarity > 0.7:
+                    return True
+        
+        return False
+
+    def _select_diverse_topic(self, available_topics: Optional[List[str]]) -> Optional[str]:
+        """
+        Select a topic that hasn't been overused recently.
+        
+        Args:
+            available_topics: List of topics to choose from
+            
+        Returns:
+            Selected topic or None if no topics available
+        """
+        if not available_topics or len(available_topics) == 0:
+            return None
+        
+        # If we don't have usage stats yet, just pick randomly
+        if not self.used_topics:
+            return random.choice(available_topics)
+        
+        # Calculate the usage frequency for each topic
+        total_usage = sum(self.used_topics.values())
+        topic_frequencies = {
+            topic: self.used_topics.get(topic, 0) / total_usage if total_usage > 0 else 0
+            for topic in available_topics
+        }
+        
+        # Find the least used topics (bottom 30%)
+        sorted_topics = sorted(topic_frequencies.items(), key=lambda x: x[1])
+        candidate_count = max(1, int(len(sorted_topics) * 0.3))
+        candidate_topics = [topic for topic, _ in sorted_topics[:candidate_count]]
+        
+        # If we have candidates, choose randomly from them
+        if candidate_topics:
+            return random.choice(candidate_topics)
+        else:
+            return random.choice(available_topics)
+
+    def _extract_key_topics_from_contexts(self, contexts: List[Dict[str, Any]]) -> List[str]:
+        """
+        Extract key topics from the context to track diversity.
+        
+        Args:
+            contexts: List of context documents
+            
+        Returns:
+            List of extracted topics
+        """
+        topics = []
+        
+        # Collect topics from context metadata
+        for ctx in contexts:
+            if "metadata" in ctx and "topics" in ctx["metadata"]:
+                metadata_topics = ctx["metadata"]["topics"]
+                if isinstance(metadata_topics, list):
+                    topics.extend(metadata_topics)
+                elif isinstance(metadata_topics, str):
+                    topics.extend([t.strip() for t in metadata_topics.split(',')])
+        
+        # If no topics found in metadata, extract them from content
+        if not topics:
+            # Simple keyword extraction
+            import re
+            from collections import Counter
+            
+            # Combine all context content
+            combined_text = " ".join([ctx.get("content", "") for ctx in contexts])
+            
+            # Extract potential topic words (nouns/proper nouns)
+            words = re.findall(r'\b[A-Z][a-z]{3,}\b|\b[a-z]{5,}\b', combined_text)
+            common_words = Counter(words).most_common(5)
+            topics = [word for word, _ in common_words]
+        
+        # Clean and deduplicate topics
+        clean_topics = []
+        for topic in topics:
+            topic = topic.strip().lower()
+            if topic and topic not in clean_topics:
+                clean_topics.append(topic)
+        
+        return clean_topics
+
+    def _is_topic_overused(self, topic: Optional[str]) -> bool:
+        """
+        Check if a topic has been overused recently.
+        
+        Args:
+            topic: Topic to check
+            
+        Returns:
+            True if the topic is overused, False otherwise
+        """
+        if not topic or not self.used_topics:
+            return False
+        
+        # Get the average usage count
+        avg_usage = sum(self.used_topics.values()) / len(self.used_topics)
+        
+        # Topic is overused if it's been used more than 2x the average
+        return self.used_topics.get(topic, 0) > avg_usage * 2
+                
     def _create_mc_prompt(self, context: str, difficulty: str, topic: Optional[str] = None) -> str:
         """Create a prompt for multiple-choice question generation."""
         topic_instruction = f"about {topic}" if topic else "on the key concepts in this material"

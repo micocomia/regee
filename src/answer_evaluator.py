@@ -126,10 +126,11 @@ class AnswerEvaluator:
             feedback = f"Correct! {options[ord(correct_answer.upper()) - 65]} is the right answer."
         else:
             correct_option = options[ord(correct_answer.upper()) - 65]
-            feedback = f"That's not quite right. The correct answer is {correct_answer}.\n\nExplanation: {correct_option}"
+            feedback = f"That's not quite right. The correct answer is {correct_answer}: {correct_option}.\n\n"
 
             # Add explanation if available
             if "explanation" in question:
+                feedback += "Explanation:"
                 feedback += f" {question['explanation']}"
 
         return {

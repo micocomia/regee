@@ -1,5 +1,6 @@
 # retrieval.py
 import numpy as np
+import random
 from typing import List, Dict, Any, Optional
 from sentence_transformers import SentenceTransformer
 from vector_store import VectorStore
@@ -93,21 +94,34 @@ class RetrievalSystem:
         return results
     
     def retrieve_for_question_generation(self, topic: Optional[str] = None, 
-                                       num_contexts: int = 3) -> List[Dict[str, Any]]:
+                                       num_contexts: int = 3,
+                                       exclude_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """
-        Retrieve high-quality contexts for question generation.
+        Retrieve high-quality contexts for question generation with improved diversity.
         
         Args:
             topic: Optional topic to generate questions about
             num_contexts: Number of contexts to retrieve
+            exclude_ids: List of document IDs to exclude from retrieval
             
         Returns:
             List of relevant document chunks for question generation
         """
-        # Create queries focused on educational content
+        # If no specific topic, sample from a variety of educational queries
+        diverse_queries = [
+            "key concepts and definitions",
+            "important principles and methodology",
+            "significant findings and results",
+            "critical analysis and evaluation",
+            "practical applications and examples",
+            "theoretical framework and models",
+            "challenges and limitations",
+            "future directions and implications"
+        ]
+        
+        # Create topic-specific queries if a topic is provided
         if topic:
-            # Create multiple queries to diversify results
-            queries = [
+            topic_queries = [
                 f"key concepts about {topic}",
                 f"important definitions related to {topic}",
                 f"main principles of {topic}",
@@ -115,14 +129,11 @@ class RetrievalSystem:
                 f"details about {topic}",
                 f"{topic}"
             ]
+            # Use topic queries + a few diverse queries
+            queries = topic_queries + random.sample(diverse_queries, 2)
         else:
-            # When no topic specified, look for educational content
-            queries = [
-                "important concepts and definitions",
-                "key principles and methodologies",
-                "significant findings and results",
-                "critical analysis and evaluation"
-            ]
+            # Randomly select diverse queries to avoid always using the same ones
+            queries = random.sample(diverse_queries, min(5, len(diverse_queries)))
         
         all_results = []
         
@@ -130,43 +141,75 @@ class RetrievalSystem:
         for query in queries:
             results = self.retrieve(
                 query=query,
-                top_k=num_contexts // len(queries) + 1  # Distribute contexts among queries
-                #filter_topics=[topic] if topic else None
+                top_k=max(3, num_contexts // len(queries) + 1)  # Ensure at least 3 results per query
             )
             all_results.extend(results)
         
-        # Remove duplicates (if any)
+        # Remove duplicates and excluded IDs
         seen_ids = set()
         unique_results = []
         for result in all_results:
-            if result["id"] not in seen_ids:
+            if result["id"] not in seen_ids and (exclude_ids is None or result["id"] not in exclude_ids):
                 seen_ids.add(result["id"])
                 unique_results.append(result)
         
-        # Filter out low-quality contexts for questions
-        quality_results = []
+        # Enhance diversity by grouping contexts by their embedded topics
+        topic_groups = {}
         for result in unique_results:
+            # Extract potential topics from the content
             content = result["content"]
-                
-            # Contexts with bullets/numbers likely contain good educational content
-            has_bullets = any(line.strip().startswith(("•", "-", "*", "1.", "2.")) for line in content.split("\n"))
-            has_educational_markers = any(marker in content.lower() for marker in 
-                                          ["definition", "concept", "principle", "method", 
-                                           "example", "important", "note that", "key", "understand"])
+            potential_topics = []
             
-            # Prioritize contexts with educational indicators
-            if has_bullets or has_educational_markers:
-                result["quality_score"] = 1.5 * result.get("adjusted_score", result.get("similarity", 0.5))
-            else:
-                result["quality_score"] = result.get("adjusted_score", result.get("similarity", 0.5))
+            # Check metadata for topics
+            if "metadata" in result and "topics" in result["metadata"]:
+                metadata_topics = result["metadata"]["topics"]
+                if isinstance(metadata_topics, list):
+                    potential_topics.extend(metadata_topics)
+                elif isinstance(metadata_topics, str):
+                    potential_topics.extend([t.strip() for t in metadata_topics.split(',')])
+            
+            # If no topics in metadata, use a simple extraction
+            if not potential_topics:
+                # Identify capitalized terms as potential topics
+                import re
+                capitalized_terms = re.findall(r'\b[A-Z][a-z]{3,}\b', content)
+                if capitalized_terms:
+                    potential_topics = capitalized_terms[:3]  # Take up to 3 capitalized terms
+            
+            # Use the first topic as the group key, or "general" if none found
+            group_key = potential_topics[0].lower() if potential_topics else "general"
+            
+            if group_key not in topic_groups:
+                topic_groups[group_key] = []
+            topic_groups[group_key].append(result)
+        
+        # Select a balanced set of results from each topic group
+        balanced_results = []
+        
+        # First, determine how many results to take from each group
+        num_groups = len(topic_groups)
+        base_count = num_contexts // num_groups if num_groups > 0 else 0
+        remainder = num_contexts % num_groups if num_groups > 0 else 0
+        
+        # Take at least one result from each group, distributing the remainder
+        for group_key, group_results in topic_groups.items():
+            group_count = base_count + (1 if remainder > 0 else 0)
+            if remainder > 0:
+                remainder -= 1
                 
-            quality_results.append(result)
+            # Sort group by quality score
+            group_results.sort(key=lambda x: x.get("quality_score", 0), reverse=True)
+            balanced_results.extend(group_results[:group_count])
         
-        # Sort by quality score and take top contexts
-        quality_results.sort(key=lambda x: x["quality_score"], reverse=True)
+        # If we still need more results to reach num_contexts
+        if len(balanced_results) < num_contexts:
+            # Get all remaining results
+            remaining = [r for r in unique_results if r not in balanced_results]
+            remaining.sort(key=lambda x: x.get("quality_score", 0), reverse=True)
+            balanced_results.extend(remaining[:num_contexts - len(balanced_results)])
         
-        return quality_results[:num_contexts]
-    
+        return balanced_results[:num_contexts]
+        
     def get_available_topics(self) -> List[str]:
         """
         Get all available topics in the vector store.

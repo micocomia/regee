@@ -1,15 +1,16 @@
 # app.py
 import streamlit as st
-from streamlit.components.v1 import html
-from streamlined_custom_component import create_component
 import json
 import os
 import base64
 import time
-from typing import Dict, Any, List, Optional
 import logging
 import re
 import hashlib
+import asyncio
+from streamlit.components.v1 import html
+from streamlined_custom_component import create_component
+from typing import Dict, Any, List, Optional
 
 # Import components
 from document_processor import DocumentProcessor 
@@ -26,8 +27,9 @@ from text_to_speech import init_tts_in_session_state, speak_response
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-gee_gee_avatar = "https://yt3.googleusercontent.com/ytc/AIdro_ntlFIYXvx-85ML7yd7DEHYO4Ehd9VF6vE-QHCT6JYVoVw=s900-c-k-c0x00ffffff-no-rj"
-user_avatar = None
+# Define where to get avatars
+gee_gee_avatar = "../test/app/regee.JPG"
+user_avatar = "../test/app/avatar.JPG"
 
 # Initialize session state
 if 'initialized' not in st.session_state:
@@ -55,17 +57,17 @@ def initialize_systems():
     # Only initialize once
     if st.session_state.initialized:
         return
-
+    
     # Document Processor
     st.session_state.document_processor = DocumentProcessor(
         embedding_model="all-MiniLM-L6-v2",
-        chunk_size=500,
-        chunk_overlap=50,
+        chunk_size=800,
+        chunk_overlap=100,
     )
-    
+
     # Vector store for document storage
     st.session_state.vector_store = VectorStore(
-        collection_name="test_collection",
+        collection_name="regee_collection",
         persist_directory="./data/vector_store"
     )
     
@@ -99,13 +101,9 @@ def initialize_systems():
     
     # Text To Speech
     init_tts_in_session_state() 
-
-    # Set speech state
-    #st.session_state.intent_handler.session.speech_enabled = st.session_state.speech_enabled
     
     st.session_state.initialized = True
     logger.info("All systems initialized")
-
 
 def add_message(role: str, avatar: str, content: str, **kwargs):
     """Add a message to the conversation history."""
@@ -180,7 +178,13 @@ def generate_assistant_response():
 
         # Store the response text to speak after UI update
         response_text = response.get("text", "I'm not sure how to respond to that.")
-        st.session_state.pending_speech = response_text
+
+        if 'regee' in response_text.lower():
+            text_to_speak = response_text.lower().replace('regee','Reggie')
+        else:
+            text_to_speak = response_text
+
+        st.session_state.pending_speech = text_to_speak
 
         # Reset processing indicators
         st.session_state.show_processing = False
@@ -375,7 +379,7 @@ def main():
     # Sidebar Elements
     with st.sidebar:
         # App title and description moved to sidebar
-        st.title("Instructions")
+        st.title("ReGee")
         st.markdown("""
         Upload your learning materials and let ReGee help you review by asking questions about the content.
         ReGee will help you think critically by quizzing you rather than explaining concepts.
