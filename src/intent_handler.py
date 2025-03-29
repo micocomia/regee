@@ -63,12 +63,14 @@ class IntentHandlerManager:
             "enable_speech": self.handle_enable_speech,
             "disable_speech": self.handle_disable_speech,
             "continue": self.handle_continue,
+            "out_of_scope": self.handle_out_of_scope, 
             "unknown": self.handle_unknown_intent
         }
     
     def handle_intent(self, intent_type: str, intent_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Route intent to appropriate handler with support for multiple intents.
+        Process settings intents before action intents regardless of priority.
         
         Args:
             intent_type: Type of intent
@@ -79,34 +81,59 @@ class IntentHandlerManager:
         """
         logger.info(f"Handling primary intent: {intent_type}")
         
+        if self.session.is_reviewing and self.session.current_question and intent_type in ["unknown", "out_of_scope"]:
+            logger.info(f"Converting {intent_type} intent to 'answer' intent because we're in an active review session")
+            intent_type = "answer"
+            if "text" in intent_data:
+                intent_data["answer"] = intent_data["text"]
+            intent_data["intent"] = "answer"
+
         responses = []
         
         # Set processing state based on the intent type
         self._update_processing_state(intent_type)
         
-        # Handle the primary intent
-        handler = self.handlers.get(intent_type, self.handle_unknown_intent)
-        primary_response = handler(intent_data)
-        responses.append(primary_response)
-        
-        # Handle any additional intents
+        # Collect all intents to process (primary + additional)
+        all_intents = [{"intent": intent_type, **intent_data}]
         if "additional_intents" in intent_data and intent_data["additional_intents"]:
-            logger.info(f"Found {len(intent_data['additional_intents'])} additional intents")
-            
-            for additional_intent in intent_data["additional_intents"]:
-                additional_intent_type = additional_intent["intent"]
-                logger.info(f"Handling additional intent: {additional_intent_type}")
-                
-                add_handler = self.handlers.get(additional_intent_type, self.handle_unknown_intent)
-                add_response = add_handler(additional_intent)
-                responses.append(add_response)
+            all_intents.extend(intent_data["additional_intents"])
+        
+        logger.info(f"Processing {len(all_intents)} total intents")
+        
+        # Categorize intents by type
+        settings_intents = []
+        action_intents = []
+        info_intents = []
+        
+        for intent in all_intents:
+            intent_name = intent["intent"]
+            # Settings intents
+            if intent_name in ["set_question_type", "set_num_questions", "set_topic", 
+                              "set_difficulty", "enable_speech", "disable_speech"]:
+                settings_intents.append(intent)
+            # Action intents
+            elif intent_name in ["start_review", "stop_review", "document_upload", "continue"]:
+                action_intents.append(intent)
+            # Information intents
+            else:
+                info_intents.append(intent)
+        
+        # Process all intents in the correct order: settings first, then actions, then info
+        # This ensures settings are applied before actions like start_review
+        all_ordered_intents = settings_intents + action_intents + info_intents
+        
+        for intent in all_ordered_intents:
+            intent_name = intent["intent"]
+            handler = self.handlers.get(intent_name, self.handle_unknown_intent)
+            response = handler(intent)
+            responses.append(response)
         
         # Combine responses
         combined_response = self._combine_responses(responses)
         
         # Add speech output if enabled
-        if self.session.speech_enabled and self.tts_system and "text" in combined_response:
-            self.tts_system.speak(combined_response["text"])
+        if self.session.speech_enabled and self.text_to_speech and "text" in combined_response:
+            self.text_to_speech.speak(combined_response["text"])
             
         return combined_response
 
@@ -253,13 +280,17 @@ class IntentHandlerManager:
                 "text": "We're not currently in a review session.",
                 "intent": "stop_review"
             }
-            
+                
         self.session.is_reviewing = False
         
         # Generate summary of the session
         correct = self.session.correct_answers
         total = self.session.total_answered
         accuracy = (correct / total) * 100 if total > 0 else 0
+        
+        # Reset counters after generating the summary
+        self.session.correct_answers = 0
+        self.session.total_answered = 0
         
         return {
             "text": f"Review session ended. You answered {correct} out of {total} questions correctly ({accuracy:.1f}%).",
@@ -331,9 +362,11 @@ class IntentHandlerManager:
                 total = self.session.total_answered
                 accuracy = (correct / total) * 100 if total > 0 else 0
                 
-                # Reset the current question since we're done
+                # Reset all counters since we're done
                 self.session.current_question = None
                 self.session.is_reviewing = False
+                self.session.correct_answers = 0
+                self.session.total_answered = 0
                 
                 return {
                     "text": f"{evaluation['feedback']}\n\nThat completes our review session. You answered {correct} out of {total} questions correctly ({accuracy:.1f}%).",
@@ -539,20 +572,18 @@ class IntentHandlerManager:
         document review and study preparation.
         """
         return {
-            "text": "I'm a study assistant focused on helping you review document contents. " + 
+            "text": "I can't help you with that. I'm a study assistant focused on helping you review educational materials. " + 
                     "I can help you with:\n\n" +
-                    "• Uploading documents\n" +
-                    "• Generating review questions\n" +
-                    "• Testing your knowledge\n" +
-                    "• Adjusting review settings\n\n" +
-                    "What documents would you like to review?",
+                    "• Uploading documents\n\n" +
+                    "• Generating review questions\n\n" +
+                    "• Testing your knowledge\n",
             "intent": "out_of_scope"
         }
 
     def handle_unknown_intent(self, intent_data: Dict[str, Any]) -> Dict[str, Any]:
         """Handle unknown intent."""
         return {
-            "text": "I can't help you with that. You can upload documents, start/stop a review, " + 
+            "text": "I'm not sure I understand. You can upload documents, start/stop a review, " + 
                     "answer questions, check your status, or adjust the review settings.",
             "intent": "unknown"
         }

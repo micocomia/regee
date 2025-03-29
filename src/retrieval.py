@@ -116,7 +116,15 @@ class RetrievalSystem:
             "practical applications and examples",
             "theoretical framework and models",
             "challenges and limitations",
-            "future directions and implications"
+            "future directions and implications",
+            "compare and contrast different approaches",
+            "step-by-step procedures and methods",
+            "cause and effect relationships",
+            "historical development and evolution",
+            "common misconceptions and clarifications",
+            "real-world case studies and examples",
+            "underlying assumptions and premises",
+            "relationships between different concepts"
         ]
         
         # Create topic-specific queries if a topic is provided

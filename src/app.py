@@ -42,9 +42,9 @@ if 'initialized' not in st.session_state:
     st.session_state.awaiting_response = False
     st.session_state.processing_type = None 
     st.session_state.processing_start_time = None
-    st.session_state.show_processing = False  # New flag for processing display
-    st.session_state.processing_message = ""  # Message to show during processing
-    
+    st.session_state.show_processing = False 
+    st.session_state.processing_message = "" 
+ 
     # Speech recognition specific state
     st.session_state.speech_sidebar_enabled = False
     st.session_state.recognized_text = ""
@@ -69,6 +69,9 @@ def initialize_systems():
         collection_name="regee_collection",
         persist_directory="./data/vector_store"
     )
+
+    # Clear the vector store to start fresh
+    st.session_state.vector_store.clear()
     
     # Retrieval system for finding relevant content
     st.session_state.retrieval_system = RetrievalSystem(
@@ -124,6 +127,15 @@ def handle_user_input(user_input: str):
     if not user_input:
         return
     
+    # Stop any ongoing TTS speech when user inputs new message
+    # Use a try-except block to handle any errors gracefully
+    try:
+        if hasattr(st.session_state, 'tts') and st.session_state.tts.is_enabled:
+            st.session_state.tts.stop()
+            logger.info("TTS stopped due to user input")
+    except Exception as e:
+        logger.error(f"Error stopping TTS: {str(e)}")
+    
     # Add user message to history
     add_message("user", user_avatar, user_input)
     
@@ -132,7 +144,6 @@ def handle_user_input(user_input: str):
     
     # Force a rerun to update the UI and show the processing indicator
     st.rerun()
-
 def generate_assistant_response():
     """
     Process the most recent user message and generate a response.
@@ -178,8 +189,11 @@ def generate_assistant_response():
         # Store the response text to speak after UI update
         response_text = response.get("text", "I'm not sure how to respond to that.")
 
+        # Normalize ReGee to Reggie so that it is pronounce correctly
         if 'regee' in response_text.lower():
             text_to_speak = response_text.lower().replace('regee','Reggie')
+        elif 'explanation:' in response_text.lower():
+            text_to_speak = response_text.split("Explanation:")[0].strip()
         else:
             text_to_speak = response_text
 
@@ -199,8 +213,6 @@ def generate_assistant_response():
         # Reset processing indicators
         st.session_state.show_processing = False
 
-        
-
 def process_uploaded_file(uploaded_file, is_part_of_batch=False):
     """
     Process an uploaded document and provide feedback in the chat.
@@ -209,7 +221,7 @@ def process_uploaded_file(uploaded_file, is_part_of_batch=False):
         uploaded_file: The file to process
         is_part_of_batch: Whether this file is part of a batch upload (affects messaging)
     """
-    try:
+    try:   
         # Create uploads directory if it doesn't exist
         os.makedirs("./uploads", exist_ok=True)
         
@@ -311,24 +323,30 @@ def render_speech_sidebar():
     with st.sidebar:
         # Add a simple TTS toggle (since we removed complex controls)
         st.subheader("Text-to-Speech")
-        tts_enabled = st.toggle("Enable Text-to-Speech", value=st.session_state.tts.is_enabled)
         
-        if tts_enabled:
-            st.session_state.tts.enable()
-        else:
-            st.session_state.tts.disable()
-
+        # Toggle for enabling/disabling TTS
+        tts_enabled = st.toggle(
+            "Enable Text-to-Speech", 
+            value=st.session_state.tts.is_enabled,
+        )
+        # Update TTS state if toggle value changed
+        if tts_enabled != st.session_state.tts.is_enabled:
+            st.session_state.tts.is_enabled = tts_enabled
+        
         st.subheader("Speech Recognition")
         
-        # Toggle for enabling/disabling
-        speech_enabled = st.toggle("Enable Speech Recognition", value=st.session_state.speech_sidebar_enabled)
+        # Toggle for enabling/disabling speech recognition
+        speech_enabled = st.toggle(
+            "Enable Speech Recognition", 
+            value=st.session_state.speech_sidebar_enabled,
+        )
         
-        # Update state if changed
+        # Update state if changed (only if not disabled)
         if speech_enabled != st.session_state.speech_sidebar_enabled:
             st.session_state.speech_sidebar_enabled = speech_enabled
             st.session_state.recognized_text = ""
         
-        # Only show the interface if enabled
+        # Only show the interface if enabled and not processing document
         if speech_enabled:
             # Create the speech component
             speech_component = speech_recognition()
@@ -404,6 +422,14 @@ def main():
         
         # Only process if we haven't already processed this exact text
         if not hasattr(st.session_state, "last_processed_hash") or st.session_state.last_processed_hash != transcript_hash:
+            # Stop any ongoing TTS first
+            try:
+                if hasattr(st.session_state, 'tts') and st.session_state.tts.is_enabled:
+                    st.session_state.tts.stop()
+                    logger.info("TTS stopped due to voice input")
+            except Exception as e:
+                logger.error(f"Error stopping TTS: {str(e)}")
+                
             st.session_state.last_processed_hash = transcript_hash
             st.session_state.speech_to_send = ""  # Clear after sending
             st.session_state.recognized_text = ""  # Clear recognized text too
@@ -412,7 +438,7 @@ def main():
             if text_to_send.strip():
                 handle_user_input(text_to_send)
                 st.rerun()  # Force a rerun to update the UI with the new message
-    
+
     # Special processing path
     if st.session_state.show_processing:
         display_chat_messages()
@@ -430,9 +456,9 @@ def main():
                 if intent_type != "answer" and intent_type != "continue":
                     typing_container.markdown("*...*")
                 elif st.session_state.intent_handler.session.current_question is not None and st.session_state.intent_handler.session.awaiting_feedback == False:
-                    typing_container.markdown("*Evaluating your answer...*")
+                    typing_container.markdown("*Evaluating your answer and generating the next question...*")
                 else:
-                    typing_container.markdown("*Generating next question...*")
+                    typing_container.markdown("*Generating the next question...*")
             else:
                 typing_container.markdown("*...*")
 
@@ -463,18 +489,26 @@ def main():
         </div>
         """, unsafe_allow_html=True)
     
-    # Handle file uploads directly from chat input
     user_input = st.chat_input(
         "Type your message here, upload files, or use the speech recognition in the sidebar",
         accept_file="multiple",
         file_type=["pdf", "pptx"]
-    )
-    
+    )  
+
     # Process text input if provided
     if user_input and user_input.text:
         handle_user_input(user_input.text)
     # Process uploaded files if any
     elif user_input and user_input["files"]:
+        # Stop any ongoing TTS speech when files are uploaded
+        try:
+            if hasattr(st.session_state, 'tts') and st.session_state.tts.is_enabled:
+                st.session_state.tts.stop()
+                logger.info("TTS stopped due to file upload")
+        except Exception as e:
+            logger.error(f"Error stopping TTS: {str(e)}")
+        
+            
         # Add a message showing that files were uploaded
         file_names = [file.name for file in user_input["files"]]
         files_str = ", ".join(file_names)

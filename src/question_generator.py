@@ -68,7 +68,7 @@ class QuestionGenerator:
             # Use the improved context retrieval
             contexts = self.retrieval_system.retrieve_for_question_generation(
                 topic=topic, 
-                num_contexts=10
+                num_contexts=100
             )
         
             if not contexts:
@@ -345,7 +345,7 @@ class QuestionGenerator:
             "prompt": prompt,
             "stream": False,
             "options": {
-                "temperature": 0.7,
+                "temperature": 0.3,
                 "top_p": 0.9,
                 "top_k": 40,
                 "num_predict": 1024

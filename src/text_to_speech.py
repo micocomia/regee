@@ -7,6 +7,9 @@ import logging
 from typing import Dict, Any
 import pygame
 import io
+import threading
+import time
+import signal
 
 class TextToSpeech:
     """
@@ -21,9 +24,13 @@ class TextToSpeech:
         self.volume = "+100%"  # Default volume (normal)
         self.pitch = "+12Hz"  # Default pitch (normal)
         self.temp_file = None  # Temporary file for audio
+        self.is_playing = False  # Track if audio is currently playing
+        self.play_thread = None  # Thread for playing audio
+        self.stop_requested = False  # Flag to request stop
         
         # Initialize pygame for audio playback
-        pygame.mixer.init()
+        if not pygame.mixer.get_init():
+            pygame.mixer.init()
         
         # Set up logging
         self.logger = logging.getLogger(__name__)
@@ -94,6 +101,8 @@ class TextToSpeech:
     def disable(self) -> Dict[str, Any]:
         """Disable text-to-speech."""
         self.is_enabled = False
+        # Stop any ongoing speech
+        self.stop()
         self.logger.info("Text-to-speech disabled")
         return {"status": "disabled", "message": "Text-to-speech disabled"}
     
@@ -112,26 +121,29 @@ class TextToSpeech:
             self.logger.warning(error_msg)
             return {"status": "error", "message": error_msg}
         
+        # Stop any previously playing audio
+        self.stop()
+        
         try:
             # Create a temporary file for the audio
             with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as fp:
                 self.temp_file = fp.name
             
+            # Reset stop flag
+            self.stop_requested = False
+            
             # Run the async TTS generation
             asyncio.run(self._generate_speech(text))
             
-            # Play the audio
-            pygame.mixer.music.load(self.temp_file)
-            pygame.mixer.music.play()
+            # Set playing flag
+            self.is_playing = True
             
-            # Wait for playback to complete
-            while pygame.mixer.music.get_busy():
-                pygame.time.Clock().tick(10)
+            # Start audio in a separate thread to avoid blocking Streamlit
+            self.play_thread = threading.Thread(target=self._play_audio)
+            self.play_thread.daemon = True
+            self.play_thread.start()
             
-            # Clean up temporary file
-            self._cleanup_temp_file()
-            
-            self.logger.info(f"Spoke text: {text[:50]}...")  # Log first 50 characters
+            self.logger.info(f"Started speaking text: {text[:50]}...")  # Log first 50 characters
             return {
                 "status": "speaking", 
                 "text": text,
@@ -141,6 +153,68 @@ class TextToSpeech:
             error_msg = f"Speech error: {str(e)}"
             self.logger.error(error_msg)
             self._cleanup_temp_file()
+            self.is_playing = False
+            return {"status": "error", "message": error_msg}
+    
+    def _play_audio(self):
+        """Play audio in a separate thread."""
+        try:
+            # Make sure mixer is initialized
+            if not pygame.mixer.get_init():
+                pygame.mixer.init()
+            
+            # Load and play audio
+            pygame.mixer.music.load(self.temp_file)
+            pygame.mixer.music.play()
+            
+            # Wait for playback to complete or stop to be requested
+            while pygame.mixer.music.get_busy() and not self.stop_requested:
+                pygame.time.Clock().tick(10)
+            
+            # Mark as not playing once done
+            self.is_playing = False
+            
+            # Clean up
+            self._cleanup_temp_file()
+        except Exception as e:
+            self.logger.error(f"Error in playback thread: {str(e)}")
+            self.is_playing = False
+            self._cleanup_temp_file()
+    
+    def stop(self) -> Dict[str, Any]:
+        """
+        Stop any currently playing speech immediately.
+        
+        Returns:
+            Status information
+        """
+        if not self.is_playing:
+            return {"status": "not_playing", "message": "No speech is currently playing"}
+        
+        try:
+            # Set stop flag for thread
+            self.stop_requested = True
+            
+            # Stop pygame playback
+            if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
+                pygame.mixer.music.stop()
+            
+            # Wait a moment for thread to complete
+            time.sleep(0.1)
+            
+            # Reset playing status
+            self.is_playing = False
+            
+            # Clean up the temporary file
+            self._cleanup_temp_file()
+            
+            self.logger.info("Stopped speech playback")
+            return {"status": "stopped", "message": "Speech stopped"}
+        except Exception as e:
+            error_msg = f"Error stopping speech: {str(e)}"
+            self.logger.error(error_msg)
+            # Attempt to reset state
+            self.is_playing = False
             return {"status": "error", "message": error_msg}
     
     async def _generate_speech(self, text: str):
@@ -181,7 +255,8 @@ class TextToSpeech:
             "voice": self.voice,
             "rate": self.rate,
             "volume": self.volume,
-            "pitch": self.pitch
+            "pitch": self.pitch,
+            "is_playing": self.is_playing
         }
     
     async def list_voices(self):
@@ -210,15 +285,3 @@ def speak_response(response_text: str):
     """
     if hasattr(st.session_state, 'tts') and st.session_state.tts.is_enabled:
         st.session_state.tts.speak(response_text)
-
-# Streamlit App Entry Point
-if __name__ == "__main__":
-    st.title("Text-to-Speech App")
-    
-    # Initialize TTS system in session state
-    init_tts_in_session_state()
-
-    # Text input for speech synthesis
-    user_input = st.text_area("Enter text to speak:")
-    if st.button("Speak"):
-        speak_response(user_input)

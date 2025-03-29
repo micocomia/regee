@@ -171,6 +171,7 @@ class AnswerEvaluator:
             3. Start your response with the opening curly brace '{{' and end with a closing curly brace '}}'.
             4. Do not add any explanatory text before or after the JSON.
             5. Ensure that the feedback is informative but concise.
+            6. Do not ask the student to try answering again.
             
             JSON OUTPUT REQUIREMENTS:
             {{
@@ -185,7 +186,7 @@ class AnswerEvaluator:
                 "prompt": prompt,
                 "stream": False,
                 "options": {
-                    "temperature": 0.1,  # Low temperature for consistent evaluations
+                    "temperature": 0.000000001,
                     "top_p": 0.9,
                     "top_k": 40,
                     "num_predict": 1024
